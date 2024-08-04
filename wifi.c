@@ -42,6 +42,7 @@ static const char *TAG = "WIFI";
 static EventGroupHandle_t s_wifi_event_group;
 static const int CONNECTED_BIT = BIT0;
 static const int ESPTOUCH_DONE_BIT = BIT1;
+static bool esptouch_mode;
 
 static void smartconfig_task(void * parm);
 
@@ -55,8 +56,9 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 		// esp_wifi_connect();
 		ESP_LOGI(TAG, "Station start");
 	} else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
-		// ESP_LOGI(TAG, "Station disconnected from AP");
-		esp_wifi_connect();
+		ESP_LOGI(TAG, "Station disconnected");
+		if (esptouch_mode != true)
+			esp_wifi_connect();
 		xEventGroupClearBits(s_wifi_event_group, CONNECTED_BIT);
 		msg.type = EVENT_BUS_WIFI_DISCONNECTED;
 		event_bus_send(&msg);
@@ -96,6 +98,7 @@ static void event_handler(void* arg, esp_event_base_t event_base,
 			printf("\n");
 		}
 
+		esptouch_mode = false;
 		ESP_ERROR_CHECK(esp_wifi_disconnect());
 		ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
 		esp_wifi_connect();
@@ -108,6 +111,9 @@ static void smartconfig_task(void *pvParameters)
 {
 	struct event_bus_msg msg;
 	EventBits_t uxBits;
+
+	esptouch_mode = true;
+
 	ESP_ERROR_CHECK(esp_wifi_disconnect());
 	ESP_ERROR_CHECK(esp_smartconfig_set_type(SC_TYPE_ESPTOUCH));
 
