@@ -27,5 +27,6 @@
 
 #define CLASS_ID_UNKNOWN		0x00	/* Unknown class */
 #define CLASS_ID_VOICE_LED		0x01	/* Voice LED class */
+#define CLASS_ID_BUTTON_LED		0x02	/* Button LED class */
 
 #endif /* __CLASS_ID_H_ */
