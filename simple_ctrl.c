@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -33,7 +34,11 @@
 #include <lwip/dns.h>
 #include <lwip/netdb.h>
 #include <esp_log.h>
+#if defined(CONFIG_IDF_TARGET_ESP8266)
+# include <esp_wifi.h>
+#else
 #include <esp_mac.h>
+#endif
 #include "event_bus.h"
 #include "crypto.h"
 #include "class_id.h"
@@ -78,7 +83,7 @@ static const char *TAG = "SIMPLE-CTRL";
 
 #define CTRL_INFO_PASSWD_LENGTH		16
 
-#define SPIFFS_PASSWD_FILE_NAME		"VOICE-LED-PASSWD"
+#define SPIFFS_PASSWD_FILE_NAME		"CRYPTO-PASSWD"
 
 struct simple_ctrl_handle {
 	uint8_t load_type;
@@ -106,7 +111,11 @@ static void simple_ctrl_init_info_id(void)
 {
 	uint8_t mac[6];
 
+#if defined(CONFIG_IDF_TARGET_ESP8266)
+	ESP_ERROR_CHECK(esp_wifi_get_mac(ESP_IF_WIFI_STA, mac) != ESP_OK);
+#else
 	ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK);
+#endif
 	sprintf(info_id, "%02x%02x%02x%02x%02x%02x%02x",
 		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], 0);
 
@@ -604,7 +613,7 @@ static void simple_ctrl_body_handle(void)
 								  (buffer[3] << 8) |
 								  (buffer[4] << 16) |
 								  (buffer[5] << 24);
-						ESP_LOGI(TAG, "(%d) load_type:%02x, crypto_type:%02x, load_len:%lu", fds[index],
+						ESP_LOGI(TAG, "(%d) load_type:%02x, crypto_type:%02x, load_len:%u", fds[index],
 							 handle.load_type, handle.crypto_type, handle.load_len);
 
 						count = 0;
@@ -617,10 +626,10 @@ static void simple_ctrl_body_handle(void)
 								ESP_LOGI(TAG, "Read exception or timeout, disconnected (%d)", fds[index]);
 								goto closefd;
 							}
-							ESP_LOGD(TAG, "(%d) Expect: %lu; Result: %d", fds[index], size, ret);
+							ESP_LOGD(TAG, "(%d) Expect: %u; Result: %d", fds[index], size, ret);
 
 							count += ret;
-							ESP_LOGD(TAG, "(%d) Handle [%lu/%lu]", fds[index], count, handle.load_len);
+							ESP_LOGD(TAG, "(%d) Handle [%u/%u]", fds[index], count, handle.load_len);
 
 							/* Handle data */
 							ret = simple_ctrl_handle_pad(&handle, buffer, ret, sizeof(buffer));

@@ -36,6 +36,10 @@
 
 static const char *TAG = "KEYBOARD";
 
+#if defined(CONFIG_IDF_TARGET_ESP8266)
+#define portYIELD_FROM_ISR portYIELD
+#endif
+
 #define GPIO_PIN_KEYBOARD_SEL(NUM)	(1ULL << (NUM))
 
 #define KEYBOARD_DETECTION_INTERVA	40

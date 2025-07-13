@@ -71,6 +71,7 @@ void spiffs_init(void)
 		ESP_LOGI(TAG, "Partition size: total: %d, used: %d", total, used);
 	}
 
+#if !defined(CONFIG_IDF_TARGET_ESP8266)
 	// Check consistency of reported partiton size info.
 	if (used > total) {
 		ESP_LOGW(TAG, "Number of used bytes cannot be larger than total. Performing SPIFFS_check().");
@@ -84,6 +85,7 @@ void spiffs_init(void)
 			ESP_LOGI(TAG, "SPIFFS_check() successful");
 		}
 	}
+#endif
 
 	// All done, unmount partition and disable SPIFFS
 	// esp_vfs_spiffs_unregister(conf.partition_label);

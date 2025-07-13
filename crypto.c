@@ -28,7 +28,9 @@
 #include <esp_log.h>
 #include <string.h>
 #include "crypto.h"
+#if !defined(CONFIG_IDF_TARGET_ESP8266)
 #include "aes.h"
+#endif
 
 static const char *TAG = "CRYPTO";
 
@@ -77,6 +79,7 @@ static int de_xor(struct crypto *handle, char *buffer, int vaild_size, int buff_
 	return do_xor(handle, buffer, vaild_size);
 }
 
+#if !defined(CONFIG_IDF_TARGET_ESP8266)
 static inline int aes128ecb_check_key(struct crypto *handle)
 {
 	if (handle->plen > 16) {
@@ -141,11 +144,14 @@ static int de_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int
 {
 	return do_aes128ecb(handle, buffer, vaild_size, buff_size, AES_ECB_decrypt);
 }
+#endif
 
 static struct algorithm list[CRYPTO_TYPE_MAX] = {
 	[CRYPTO_TYPE_NONE] = { en_none, de_none },			/* 0x00: No encryption */
 	[CRYPTO_TYPE_XOR] = { en_xor, de_xor },				/* 0x01: Simple xor replacement */
+#if !defined(CONFIG_IDF_TARGET_ESP8266)
 	[CRYPTO_TYPE_AES128ECB] = { en_aes128ecb, de_aes128ecb },	/* 0x02: AES128-ECB */
+#endif
 };
 
 int crypto_en(struct crypto *handle, char *buffer, int vaild_size, int buff_size)
