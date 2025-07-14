@@ -40,6 +40,7 @@ extern "C" {
 #define EVENT_BUS_WIFI_CONNECTED	0x05		// Wi-Fi is connected
 #define EVENT_BUS_WIFI_DISCONNECTED	0x06		// Wi-Fi is disconnected
 #define EVENT_BUS_KEYBOARD		0x07		// Keyboard state updated
+#define EVENT_BUS_IR_RX			0x08		// IR received
 
 struct event_bus_msg {
 	uint8_t type;
