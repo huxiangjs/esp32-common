@@ -147,7 +147,7 @@ void keyboard_init(uint8_t *gpios, uint8_t num)
 	ESP_ERROR_CHECK(ret != pdPASS);
 
 	// gpio_set_intr_type(GPIO_PIN_KEYBOARD, GPIO_INTR_NEGEDGE);
-	ESP_ERROR_CHECK(gpio_install_isr_service(0));
+	// ESP_ERROR_CHECK(gpio_install_isr_service(0));
 
 	for (index = 0; index < num; index++) {
 		key_gpios[index] = gpios[index];
