@@ -28,7 +28,9 @@
 #include <esp_log.h>
 #include <string.h>
 #include "crypto.h"
-#if !defined(CONFIG_IDF_TARGET_ESP8266)
+#if defined(CONFIG_IDF_TARGET_ESP8266)
+#include "mbedtls/aes.h"
+#else
 #include "aes.h"
 #endif
 
@@ -79,7 +81,6 @@ static int de_xor(struct crypto *handle, char *buffer, int vaild_size, int buff_
 	return do_xor(handle, buffer, vaild_size);
 }
 
-#if !defined(CONFIG_IDF_TARGET_ESP8266)
 static inline int aes128ecb_check_key(struct crypto *handle)
 {
 	if (handle->plen > 16) {
@@ -108,10 +109,13 @@ static inline void aes128ecb_fill_key(struct crypto *handle, uint8_t *key)
 		memset(key + handle->plen, 0, 16 - handle->plen);
 }
 
-static int do_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int buff_size,
-			void (*func)(const struct AES_ctx* ctx, uint8_t* buf))
+static int do_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int buff_size, bool en)
 {
+#if defined(CONFIG_IDF_TARGET_ESP8266)
+	mbedtls_aes_context aes;
+#else
 	struct AES_ctx ctx;
+#endif
 	uint8_t key[16];
 	int ret;
 
@@ -127,31 +131,52 @@ static int do_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int
 	if (ret)
 		memset(buffer + vaild_size, 0, 16 - ret);
 
+#if defined(CONFIG_IDF_TARGET_ESP8266)
+	mbedtls_aes_init(&aes);
+	if (en) {
+		mbedtls_aes_setkey_enc(&aes, key, 128);		// 128 bits
+		for (ret = 0; ret < vaild_size; ret += 16) {
+			mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT,
+					      (uint8_t *)buffer + ret,
+					      (uint8_t *)buffer + ret);
+		}
+	} else {
+		mbedtls_aes_setkey_dec(&aes, key, 128);		// 128 bits
+		for (ret = 0; ret < vaild_size; ret += 16) {
+			mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT,
+					      (uint8_t *)buffer + ret,
+					      (uint8_t *)buffer + ret);
+		}
+	}
+	mbedtls_aes_free(&aes);
+#else
 	AES_init_ctx(&ctx, key);
-
-	for (ret = 0; ret < vaild_size; ret += 16)
-		func(&ctx, (uint8_t *)buffer + ret);
+	if (en) {
+		for (ret = 0; ret < vaild_size; ret += 16)
+			AES_ECB_encrypt(&ctx, (uint8_t *)buffer + ret);
+	} else {
+		for (ret = 0; ret < vaild_size; ret += 16)
+			AES_ECB_decrypt(&ctx, (uint8_t *)buffer + ret);
+	}
+#endif
 
 	return ret;
 }
 
 static int en_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int buff_size)
 {
-	return do_aes128ecb(handle, buffer, vaild_size, buff_size, AES_ECB_encrypt);
+	return do_aes128ecb(handle, buffer, vaild_size, buff_size, true);
 }
 
 static int de_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int buff_size)
 {
-	return do_aes128ecb(handle, buffer, vaild_size, buff_size, AES_ECB_decrypt);
+	return do_aes128ecb(handle, buffer, vaild_size, buff_size, false);
 }
-#endif
 
 static struct algorithm list[CRYPTO_TYPE_MAX] = {
 	[CRYPTO_TYPE_NONE] = { en_none, de_none },			/* 0x00: No encryption */
 	[CRYPTO_TYPE_XOR] = { en_xor, de_xor },				/* 0x01: Simple xor replacement */
-#if !defined(CONFIG_IDF_TARGET_ESP8266)
 	[CRYPTO_TYPE_AES128ECB] = { en_aes128ecb, de_aes128ecb },	/* 0x02: AES128-ECB */
-#endif
 };
 
 int crypto_en(struct crypto *handle, char *buffer, int vaild_size, int buff_size)
