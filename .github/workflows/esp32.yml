@@ -1,0 +1,61 @@
+name: ESP32 CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        required: true
+        default: 'main'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    # Checkout the repository to the GitHub Actions runner
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # Get ESP-IDF
+    - name: Get ESP-IDF
+      uses: actions/checkout@v4
+      with:
+        repository: espressif/esp-idf
+        ref: release/v5.2
+        fetch-depth: 1
+
+    # Install ESP-IDF
+    - name: Install ESP-IDF
+      run: |
+        cd esp-idf/
+        ./install.sh
+        . ./export.sh
+
+    # Generate project
+    - name: Generate project
+      run: |
+        mkdir tmp
+        cd tmp
+        cp -r ../esp-idf/examples/get-started/hello_world/* .
+        cp -r ../esp32-common/* main/
+        cat << EOF > main/CMakeLists.txt 
+        file(GLOB SOURCES_LIST "*.c")
+        idf_component_register(
+          SRCS
+            \${SOURCES_LIST}
+          INCLUDE_DIRS
+            "."
+        )
+        EOF
+
+    # Run ESP32 build command
+    - name: Build
+      run: |
+        cd tmp
+        idf.py build
