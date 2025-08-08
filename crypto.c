@@ -28,10 +28,10 @@
 #include <esp_log.h>
 #include <string.h>
 #include "crypto.h"
-#if defined(CONFIG_IDF_TARGET_ESP8266)
+#ifndef USE_TINY_AES_C
 #include "mbedtls/aes.h"
 #else
-#include "aes.h"
+#include "tiny-AES-c/aes.h"
 #endif
 
 static const char *TAG = "CRYPTO";
@@ -111,7 +111,7 @@ static inline void aes128ecb_fill_key(struct crypto *handle, uint8_t *key)
 
 static int do_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int buff_size, bool en)
 {
-#if defined(CONFIG_IDF_TARGET_ESP8266)
+#ifndef USE_TINY_AES_C
 	mbedtls_aes_context aes;
 #else
 	struct AES_ctx ctx;
@@ -131,7 +131,7 @@ static int do_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int
 	if (ret)
 		memset(buffer + vaild_size, 0, 16 - ret);
 
-#if defined(CONFIG_IDF_TARGET_ESP8266)
+#ifndef USE_TINY_AES_C
 	mbedtls_aes_init(&aes);
 	if (en) {
 		mbedtls_aes_setkey_enc(&aes, key, 128);		// 128 bits
