@@ -37,7 +37,6 @@ jobs:
       run: |
         cd esp-idf/
         ./install.sh
-        . ./export.sh
 
     # Generate project
     - name: Generate project
@@ -59,5 +58,8 @@ jobs:
     # Run ESP32 build command
     - name: Build
       run: |
+        cd esp-idf/
+        . ./export.sh
+        cd -
         cd tmp
         idf.py build
