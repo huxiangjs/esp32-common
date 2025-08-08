@@ -613,7 +613,7 @@ static void simple_ctrl_body_handle(void)
 								  (buffer[3] << 8) |
 								  (buffer[4] << 16) |
 								  (buffer[5] << 24);
-						ESP_LOGI(TAG, "(%d) load_type:%02x, crypto_type:%02x, load_len:%u", fds[index],
+						ESP_LOGI(TAG, "(%d) load_type:%02x, crypto_type:%02x, load_len:%lu", fds[index],
 							 handle.load_type, handle.crypto_type, handle.load_len);
 
 						count = 0;
@@ -626,10 +626,10 @@ static void simple_ctrl_body_handle(void)
 								ESP_LOGI(TAG, "Read exception or timeout, disconnected (%d)", fds[index]);
 								goto closefd;
 							}
-							ESP_LOGD(TAG, "(%d) Expect: %u; Result: %d", fds[index], size, ret);
+							ESP_LOGD(TAG, "(%d) Expect: %lu; Result: %d", fds[index], size, ret);
 
 							count += ret;
-							ESP_LOGD(TAG, "(%d) Handle [%u/%u]", fds[index], count, handle.load_len);
+							ESP_LOGD(TAG, "(%d) Handle [%lu/%lu]", fds[index], count, handle.load_len);
 
 							/* Handle data */
 							ret = simple_ctrl_handle_pad(&handle, buffer, ret, sizeof(buffer));
