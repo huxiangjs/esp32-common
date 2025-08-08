@@ -32,6 +32,17 @@ jobs:
         fetch-depth: 1
         path: esp-idf
 
+    # Cache ESP-IDF
+    - name: Cache ESP-IDF
+      uses: actions/cache@v3
+      with:
+        path: |
+          esp-idf
+          ~/.espressif
+        key: ${{ runner.os }}-esp-idf-${{ hashFiles('esp-idf/.git/refs/heads/release/v5.2') }}
+        restore-keys: |
+          ${{ runner.os }}-esp-idf-
+
     # Install ESP-IDF
     - name: Install ESP-IDF
       run: |
