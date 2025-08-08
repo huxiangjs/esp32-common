@@ -21,6 +21,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
+        path: esp32-common
 
     # Get ESP-IDF
     - name: Get ESP-IDF
@@ -29,6 +30,7 @@ jobs:
         repository: espressif/esp-idf
         ref: release/v5.2
         fetch-depth: 1
+        path: esp-idf
 
     # Install ESP-IDF
     - name: Install ESP-IDF
