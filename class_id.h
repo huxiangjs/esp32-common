@@ -29,5 +29,6 @@
 #define CLASS_ID_VOICE_LED		0x01	/* Voice LED class */
 #define CLASS_ID_BUTTON_LED		0x02	/* Button LED class */
 #define CLASS_ID_SMART_IR		0x03	/* Smart IR class */
+#define CLASS_ID_SENSOR			0x04	/* Sensor class */
 
 #endif /* __CLASS_ID_H_ */
