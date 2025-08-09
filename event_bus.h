@@ -32,15 +32,18 @@
 extern "C" {
 #endif
 
-#define EVENT_BUS_STARTUP		0x00		// Startup
-#define EVENT_BUS_START_SMART_CONFIG	0x01		// Smart config start
-#define EVENT_BUS_STOP_SMART_CONFIG	0x02		// Smart config stop
-#define EVENT_BUS_AUDIO_RECOGNITION	0x03		// Audio recognition result
-#define EVENT_BUS_LED_COLOR_UPDATED	0x04		// LED color updated
-#define EVENT_BUS_WIFI_CONNECTED	0x05		// Wi-Fi is connected
-#define EVENT_BUS_WIFI_DISCONNECTED	0x06		// Wi-Fi is disconnected
-#define EVENT_BUS_KEYBOARD		0x07		// Keyboard state updated
-#define EVENT_BUS_IR_RX			0x08		// IR received
+#define EVENT_BUS_STARTUP			0x00	// Startup
+#define EVENT_BUS_START_SMART_CONFIG		0x01	// Smart config start
+#define EVENT_BUS_STOP_SMART_CONFIG		0x02	// Smart config stop
+#define EVENT_BUS_AUDIO_RECOGNITION		0x03	// Audio recognition result
+#define EVENT_BUS_LED_COLOR_UPDATED		0x04	// LED color updated
+#define EVENT_BUS_WIFI_CONNECTED		0x05	// Wi-Fi is connected
+#define EVENT_BUS_WIFI_DISCONNECTED		0x06	// Wi-Fi is disconnected
+#define EVENT_BUS_KEYBOARD			0x07	// Keyboard state updated
+#define EVENT_BUS_IR_RX				0x08	// IR received
+#define EVENT_BUS_SENSOR_BRIGHTNESS_UPDATED	0x09	// Brightness updated
+#define EVENT_BUS_SENSOR_HUMIDITY_UPDATED	0x0a	// Humidity updated
+#define EVENT_BUS_SENSOR_TEMPERATURE_UPDATED	0x0b	// Temperature updated
 
 struct event_bus_msg {
 	uint8_t type;
