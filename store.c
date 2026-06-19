@@ -35,7 +35,7 @@
 
 static const char *TAG = "SPIFFS";
 
-void spiffs_init(void)
+void store_init(void)
 {
 	ESP_LOGI(TAG, "Initializing SPIFFS");
 
@@ -92,7 +92,7 @@ void spiffs_init(void)
 	// ESP_LOGI(TAG, "SPIFFS unmounted");
 }
 
-int spiffs_save(char *name, char *data, int size)
+int store_save(char *name, char *data, int size)
 {
 	char path[32];
 	FILE* f;
@@ -118,7 +118,7 @@ int spiffs_save(char *name, char *data, int size)
 	return 0;
 }
 
-int spiffs_load(char *name, char *buff, int size)
+int store_load(char *name, char *buff, int size)
 {
 	char path[32];
 	FILE* f;

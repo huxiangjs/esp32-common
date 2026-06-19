@@ -25,8 +25,8 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include <esp_log.h>
 #include <string.h>
+#include "os.h"
 #include "crypto.h"
 #ifndef USE_TINY_AES_C
 #include "mbedtls/aes.h"
@@ -84,7 +84,7 @@ static int de_xor(struct crypto *handle, char *buffer, int vaild_size, int buff_
 static inline int aes128ecb_check_key(struct crypto *handle)
 {
 	if (handle->plen > 16) {
-		ESP_LOGE(TAG, "The key length of AES128 must be 16 bytes");
+		OS_LOGE(TAG, "The key length of AES128 must be 16 bytes");
 		return -1;
 	}
 
@@ -94,7 +94,7 @@ static inline int aes128ecb_check_key(struct crypto *handle)
 static inline int aes128ecb_check_size(int vaild_size, int buff_size)
 {
 	if ((vaild_size & 0xf) && (((vaild_size >> 4) + 1) > (buff_size >> 4))) {
-		ESP_LOGE(TAG, "Not enough space in the buffer");
+		OS_LOGE(TAG, "Not enough space in the buffer");
 		return -1;
 	}
 
@@ -192,12 +192,12 @@ int crypto_de(struct crypto *handle, char *buffer, int vaild_size, int buff_size
 int crypto_init(struct crypto *handle, int type, char *passwd, int plen)
 {
 	if (!handle) {
-		ESP_LOGE(TAG, "A null pointer is used");
+		OS_LOGE(TAG, "A null pointer is used");
 		return -1;
 	}
 
 	if (type >= CRYPTO_TYPE_MAX) {
-		ESP_LOGE(TAG, "Unsupported encryption type: 0x%02x", type);
+		OS_LOGE(TAG, "Unsupported encryption type: 0x%02x", type);
 		return -1;
 	}
 

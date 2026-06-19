@@ -26,23 +26,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
-#include <freertos/queue.h>
-#include <freertos/semphr.h>
-#include <lwip/sockets.h>
-#include <lwip/dns.h>
-#include <lwip/netdb.h>
-#include <esp_log.h>
-#if defined(CONFIG_IDF_TARGET_ESP8266)
-# include <esp_wifi.h>
-#else
-#include <esp_mac.h>
-#endif
+#include "os.h"
 #include "event_bus.h"
 #include "crypto.h"
 #include "class_id.h"
-#include "spiffs.h"
+#include "store.h"
 
 static const char *TAG = "SIMPLE-CTRL";
 
@@ -83,7 +71,7 @@ static const char *TAG = "SIMPLE-CTRL";
 
 #define CTRL_INFO_PASSWD_LENGTH		16
 
-#define SPIFFS_PASSWD_FILE_NAME		"CRYPTO-PASSWD"
+#define SOTRE_PASSWD_FILE_NAME		"CRYPTO-PASSWD"
 
 struct simple_ctrl_handle {
 	uint8_t load_type;
@@ -97,8 +85,8 @@ struct simple_ctrl_handle {
 };
 
 static int discover_socket;
-static TaskHandle_t discover_handle;
-static SemaphoreHandle_t send_mutex;
+static OS_THREAD discover_handle;
+static OS_MUTEX send_mutex;
 
 static char info_name[SIMPLE_CTRL_INFO_NAME_LENGTH + 1] = SIMPLE_CTRL_INFO_NAME_DEFAULT;
 static uint8_t info_class_id = CLASS_ID_UNKNOWN;
@@ -109,17 +97,13 @@ static uint8_t crypto_type = CRYPTO_TYPE_AES128ECB;
 
 static void simple_ctrl_init_info_id(void)
 {
-	uint8_t mac[6];
+	uint8_t id[6];
 
-#if defined(CONFIG_IDF_TARGET_ESP8266)
-	ESP_ERROR_CHECK(esp_wifi_get_mac(ESP_IF_WIFI_STA, mac) != ESP_OK);
-#else
-	ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK);
-#endif
+	os_get_fixed_id(id);
 	sprintf(info_id, "%02x%02x%02x%02x%02x%02x%02x",
-		mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], 0);
+		id[0], id[1], id[2], id[3], id[4], id[5], 0);
 
-	ESP_LOGI(TAG, "ID(%s)", info_id);
+	OS_LOGI(TAG, "ID(%s)", info_id);
 }
 
 static inline void simple_ctrl_discover_set_respond(char *buf, size_t buf_size)
@@ -141,7 +125,7 @@ static void simple_ctrl_discover_handle(void)
 
 	/* Create UDP */
 	discover_socket = socket(AF_INET, SOCK_DGRAM, 0);
-	ESP_ERROR_CHECK(discover_socket < 0);
+	OS_ERROR_CHECK(discover_socket < 0);
 
 	/* Allow binding address reuse */
 	setsockopt(discover_socket, SOL_SOCKET, SO_REUSEADDR, &operate, sizeof(operate));
@@ -153,22 +137,22 @@ static void simple_ctrl_discover_handle(void)
 	address.sin_port = htons(DISCOVER_UDP_PORT);
 	address.sin_addr.s_addr = INADDR_ANY;
 	ret = bind(discover_socket, (struct sockaddr *)&address, sizeof (address));
-	ESP_ERROR_CHECK(ret < 0);
+	OS_ERROR_CHECK(ret < 0);
 
 	/* Full address */
 	addr_in.sin_family = AF_INET;
 	addr_in.sin_port = htons(DISCOVER_UDP_PORT);
 	ret = inet_pton(AF_INET, DISCOVER_BROADCAST_ADDRESS,
 			(void *)&addr_in.sin_addr);
-	ESP_ERROR_CHECK(ret < 0);
+	OS_ERROR_CHECK(ret < 0);
 	count = DISCOVER_BROADCAST_NUM;
 	while (count--) {
 		simple_ctrl_discover_set_respond(buffer, sizeof(buffer));
 		sendto(discover_socket, buffer, strlen(buffer), 0,
 		       (struct sockaddr*)&addr_in, addr_size);
-		vTaskDelay(pdMS_TO_TICKS(100));
+		OS_MSLEEP(100);
 	}
-	ESP_LOGI(TAG, "online broadcast has been sent");
+	OS_LOGI(TAG, "online broadcast has been sent");
 
 	while (1) {
 		/* Wait data */
@@ -177,56 +161,56 @@ static void simple_ctrl_discover_handle(void)
 				    (struct sockaddr*)&addr_in,
 				    &addr_size);
 		if (recv_len >= 0) {
-			ESP_LOGI(TAG, "recvfrom: %s:%d",
+			OS_LOGI(TAG, "recvfrom: %s:%d",
 				 inet_ntoa(addr_in.sin_addr),
 				 ntohs(addr_in.sin_port));
 
 			buffer[recv_len] = '\0';
-			ESP_LOGI(TAG, "recvdata: %s (%dbytes)", buffer, recv_len);
+			OS_LOGI(TAG, "recvdata: %s (%dbytes)", buffer, recv_len);
 
 			/* If the flag is discover, then respond */
 			if(!strcmp(buffer, DISCOVER_SAY)) {
 				simple_ctrl_discover_set_respond(buffer, sizeof(buffer));
 				sendto(discover_socket, buffer, strlen(buffer), 0,
 				       (struct sockaddr*)&addr_in, addr_size);
-				ESP_LOGI(TAG, "discover has responded");
+				OS_LOGI(TAG, "discover has responded");
 			}
 		} else {
-			ESP_LOGI(TAG, "recv_len < 0, exit discover");
+			OS_LOGI(TAG, "recv_len < 0, exit discover");
 			break;
 		}
 	}
 }
 
-static void simple_ctrl_discover_task(void *pvParameters)
+static OS_THREAD_RET simple_ctrl_discover_task(void *pvParameters)
 {
-	ESP_LOGI(TAG, "Discover Running");
+	OS_LOGI(TAG, "Discover Running");
 
 	while (1) {
-		ESP_LOGI(TAG, "Wait network ready...");
-		ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+		OS_LOGI(TAG, "Wait network ready...");
+		OS_THREAD_SLEEP(&discover_handle);
 
-		ESP_LOGI(TAG, "Start discover...");
+		OS_LOGI(TAG, "Start discover...");
 		simple_ctrl_discover_handle();
 	}
 
-	vTaskDelete(NULL);
+	OS_THREAD_EXIT();
 }
 
 static bool simple_ctrl_notify_callback(struct event_bus_msg *msg)
 {
 	switch (msg->type) {
 	case EVENT_BUS_WIFI_CONNECTED:
-		xTaskNotifyGive(discover_handle);
+		OS_THREAD_WAKEUP(&discover_handle);
 		break;
 	case EVENT_BUS_WIFI_DISCONNECTED:
 		close(discover_socket);
 		break;
 	case EVENT_BUS_STOP_SMART_CONFIG:
-		ESP_LOGI(TAG, "Reset password...");
+		OS_LOGI(TAG, "Reset password...");
 		memset(crypto_passwd, 0, sizeof(crypto_passwd));
-		spiffs_save(SPIFFS_PASSWD_FILE_NAME, crypto_passwd,
-			    sizeof(crypto_passwd));
+		store_save(SOTRE_PASSWD_FILE_NAME, crypto_passwd,
+			   sizeof(crypto_passwd));
 		break;
 	}
 
@@ -279,12 +263,12 @@ static int simple_ctrl_ping(char *buffer, int buf_offs, int vaild_size, int buff
 	uint8_t ping_interval;
 
 	if (vaild_size != 1) {
-		ESP_LOGE(TAG, "Ping command is incorrect");
+		OS_LOGE(TAG, "Ping command is incorrect");
 		return -1;
 	}
 
 	ping_interval = buffer[buf_offs];
-	ESP_LOGD(TAG, "Remote ping interval: %u\n", ping_interval);
+	OS_LOGD(TAG, "Remote ping interval: %u\n", ping_interval);
 
 	buffer[buf_offs] = CTRL_RETURN_OK;
 	ret = 1;
@@ -299,7 +283,7 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 	uint8_t info_cmd;
 
 	if (vaild_size < 1) {
-		ESP_LOGE(TAG, "Information command is incorrect");
+		OS_LOGE(TAG, "Information command is incorrect");
 		return -1;
 	}
 
@@ -309,7 +293,7 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 	case CTRL_INFO_TYPE_GETNAME:
 		len = strlen(info_name);
 		if ((len + 2) > (buff_size - buf_offs)) {
-			ESP_LOGE(TAG, "Buffer does not have enough space");
+			OS_LOGE(TAG, "Buffer does not have enough space");
 			return -1;
 		}
 		buffer[buf_offs + 1] = CTRL_RETURN_OK;
@@ -331,7 +315,7 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 	case CTRL_INFO_TYPE_GETCLASSID:
 		ret = 3;
 		if (ret > (buff_size - buf_offs)) {
-			ESP_LOGE(TAG, "Buffer does not have enough space");
+			OS_LOGE(TAG, "Buffer does not have enough space");
 			return -1;
 		}
 		buffer[buf_offs + 1] = CTRL_RETURN_OK;
@@ -342,20 +326,20 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 		if (len > CTRL_INFO_PASSWD_LENGTH) {
 			buffer[buf_offs + 1] = CTRL_RETURN_FAIL;
 			ret = 2;
-			ESP_LOGE(TAG, "Password is too long");
+			OS_LOGE(TAG, "Password is too long");
 		} else {
 			memcpy(crypto_passwd + 1, buffer + buf_offs + 1, len);
 			crypto_passwd[0] = (char)len;
-			ret = spiffs_save(SPIFFS_PASSWD_FILE_NAME, crypto_passwd,
-					  sizeof(crypto_passwd));
+			ret = store_save(SOTRE_PASSWD_FILE_NAME, crypto_passwd,
+					 sizeof(crypto_passwd));
 			if (ret) {
 				buffer[buf_offs + 1] = CTRL_RETURN_FAIL;
 				ret = 2;
-				ESP_LOGE(TAG, "Access password saving failed");
+				OS_LOGE(TAG, "Access password saving failed");
 			} else {
 				buffer[buf_offs + 1] = CTRL_RETURN_OK;
 				ret = 2;
-				ESP_LOGI(TAG, "Access password has been changed");
+				OS_LOGI(TAG, "Access password has been changed");
 			}
 		}
 		break;
@@ -374,7 +358,7 @@ static int simple_ctrl_handle_pad(struct simple_ctrl_handle *handle,
 	int ret;
 
 	if (handle->crypto_type != crypto_type) {
-		ESP_LOGE(TAG, "Encryption method does not match");
+		OS_LOGE(TAG, "Encryption method does not match");
 		return -1;
 	}
 
@@ -385,7 +369,7 @@ static int simple_ctrl_handle_pad(struct simple_ctrl_handle *handle,
 
 	if ((vaild_size < CTRL_LOAD_HEADER_SIZE) ||
 	    memcmp(CTRL_LOAD_MAGIC, buffer, sizeof(CTRL_LOAD_MAGIC))) {
-		ESP_LOGE(TAG, "Magic is incorrect");
+		OS_LOGE(TAG, "Magic is incorrect");
 		return -1;
 	}
 	/* |--Magic(6bytes)--|--Reserved(6bytes)--|--Data size(4bytes)--| */
@@ -436,7 +420,7 @@ void simple_ctrl_notify(char *buffer, int size)
 	struct crypto handle;
 
 	if (size > NOTIFY_BUFFER_SIZE) {
-		ESP_LOGE(TAG, "Not enough space in the enbuf");
+		OS_LOGE(TAG, "Not enough space in the enbuf");
 		return;
 	}
 	memcpy(enbuf, buffer, size);
@@ -465,39 +449,39 @@ void simple_ctrl_notify(char *buffer, int size)
 	load_info[4] = (uint8_t)((load_size >> 16) & 0xff);
 	load_info[5] = (uint8_t)((load_size >> 24) & 0xff);
 
-	ESP_LOGD(TAG, "Load size: %d", load_size);
+	OS_LOGD(TAG, "Load size: %d", load_size);
 
 	for (index = 0; index < BODY_TCP_MAX_ACCEPT; index++) {
 		if (fds[index] != -1) {
-			xSemaphoreTake(send_mutex, portMAX_DELAY);
+			OS_MUTEX_LOCK(&send_mutex);
 
 			/* Send info */
 			ret = send(fds[index], load_info, sizeof(load_info), 0);
 			if (ret != sizeof(load_info)) {
-				ESP_LOGE(TAG, "Send load info fail: %d", ret);
-				xSemaphoreGive(send_mutex);
+				OS_LOGE(TAG, "Send load info fail: %d", ret);
+				OS_MUTEX_UNLOCK(&send_mutex);
 				continue;
 			}
 
 			/* Send header */
 			ret = send(fds[index], header, sizeof(header), 0);
 			if (ret != sizeof(header)) {
-				ESP_LOGE(TAG, "Send load header fail: %d", ret);
-				xSemaphoreGive(send_mutex);
+				OS_LOGE(TAG, "Send load header fail: %d", ret);
+				OS_MUTEX_UNLOCK(&send_mutex);
 				continue;
 			}
 
 			/* Send load */
 			ret = send(fds[index], enbuf, size, 0);
 			if (ret != size) {
-				ESP_LOGE(TAG, "Send load fail: %d", ret);
-				xSemaphoreGive(send_mutex);
+				OS_LOGE(TAG, "Send load fail: %d", ret);
+				OS_MUTEX_UNLOCK(&send_mutex);
 				continue;
 			}
 
-			xSemaphoreGive(send_mutex);
+			OS_MUTEX_UNLOCK(&send_mutex);
 
-			ESP_LOGD(TAG, "Notification completed (%d)", fds[index]);
+			OS_LOGD(TAG, "Notification completed (%d)", fds[index]);
 		}
 	}
 }
@@ -526,7 +510,7 @@ static void simple_ctrl_body_handle(void)
 
 	/* Create UDP */
 	body_socket = socket(AF_INET, SOCK_STREAM, 0);
-	ESP_ERROR_CHECK(body_socket < 0);
+	OS_ERROR_CHECK(body_socket < 0);
 
 	/* Allow binding address reuse */
 	setsockopt(body_socket, SOL_SOCKET, SO_REUSEADDR, &operate, sizeof(operate));
@@ -536,7 +520,7 @@ static void simple_ctrl_body_handle(void)
 	address.sin_port = htons(BODY_TCP_PORT);
 	address.sin_addr.s_addr = INADDR_ANY;
 	ret = bind(body_socket, (struct sockaddr *)&address, sizeof (address));
-	ESP_ERROR_CHECK(ret < 0);
+	OS_ERROR_CHECK(ret < 0);
 
 	/*
 	 * Start listen
@@ -545,7 +529,7 @@ static void simple_ctrl_body_handle(void)
 	 * (backlog represents the maximum length of the waiting queue)
 	 */
 	ret = listen(body_socket, 1);
-	ESP_ERROR_CHECK(ret < 0);
+	OS_ERROR_CHECK(ret < 0);
 
 	/* Initialize all to invalid */
 	for (index = 0; index < BODY_TCP_MAX_ACCEPT; index++)
@@ -567,17 +551,17 @@ static void simple_ctrl_body_handle(void)
 
 		/* Wait (OK > 0; Timeout == 0; Failed < 0) */
 		sel_ret = select(max_fd + 1, &readfds, NULL, NULL, &timeout);
-		ESP_ERROR_CHECK(sel_ret < 0);
-		ESP_LOGD(TAG, "Select resule: %d", sel_ret);
+		OS_ERROR_CHECK(sel_ret < 0);
+		OS_LOGD(TAG, "Select resule: %d", sel_ret);
 
 		/* Need to accept or receive? */
 		if (FD_ISSET(body_socket, &readfds)) {
 			newconn = accept(body_socket, (struct sockaddr *)&addr_in, &addr_size);
 			if (newconn >= 0) {
-				ESP_LOGI(TAG, "%s:%d has been connected (%d)", inet_ntoa(addr_in.sin_addr),
+				OS_LOGI(TAG, "%s:%d has been connected (%d)", inet_ntoa(addr_in.sin_addr),
 					 ntohs(addr_in.sin_port), newconn);
 			} else {
-				ESP_LOGI(TAG, "newconn < 0, drop it");
+				OS_LOGI(TAG, "newconn < 0, drop it");
 				continue;
 			}
 
@@ -587,9 +571,9 @@ static void simple_ctrl_body_handle(void)
 				setsockopt(newconn, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
 				fds[index] = newconn;
 			} else {
-				ESP_LOGW(TAG, "The connection has reached the set maximum");
+				OS_LOGW(TAG, "The connection has reached the set maximum");
 				close(newconn);
-				ESP_LOGI(TAG, "Closed (%d)", newconn);
+				OS_LOGI(TAG, "Closed (%d)", newconn);
 			}
 		}
 
@@ -600,7 +584,7 @@ static void simple_ctrl_body_handle(void)
 					ret = recv(fds[index], buffer, 6, 0);
 					if (ret > 0) {
 						if (ret < 6) {
-							ESP_LOGW(TAG, "Control field size mismatch, closed (%d)", fds[index]);
+							OS_LOGW(TAG, "Control field size mismatch, closed (%d)", fds[index]);
 							goto closefd;
 						}
 
@@ -613,7 +597,7 @@ static void simple_ctrl_body_handle(void)
 								  (buffer[3] << 8) |
 								  (buffer[4] << 16) |
 								  (buffer[5] << 24);
-						ESP_LOGI(TAG, "(%d) load_type:%02x, crypto_type:%02x, load_len:%u", fds[index],
+						OS_LOGI(TAG, "(%d) load_type:%02x, crypto_type:%02x, load_len:%u", fds[index],
 							 handle.load_type, handle.crypto_type, (unsigned int)handle.load_len);
 
 						count = 0;
@@ -623,13 +607,13 @@ static void simple_ctrl_body_handle(void)
 							/* Read pack data */
 							ret = recv(fds[index], buffer, size, 0);
 							if (ret <= 0) {
-								ESP_LOGI(TAG, "Read exception or timeout, disconnected (%d)", fds[index]);
+								OS_LOGI(TAG, "Read exception or timeout, disconnected (%d)", fds[index]);
 								goto closefd;
 							}
-							ESP_LOGD(TAG, "(%d) Expect: %u; Result: %d", fds[index], (unsigned int)size, ret);
+							OS_LOGD(TAG, "(%d) Expect: %u; Result: %d", fds[index], (unsigned int)size, ret);
 
 							count += ret;
-							ESP_LOGD(TAG, "(%d) Handle [%u/%u]", fds[index],
+							OS_LOGD(TAG, "(%d) Handle [%u/%u]", fds[index],
 								 (unsigned int)count, (unsigned int)handle.load_len);
 
 							/* Handle data */
@@ -641,7 +625,7 @@ static void simple_ctrl_body_handle(void)
 								/* Encrypto */
 								ret = crypto_en(&handle.out_crypto, buffer, vaild_size, sizeof(buffer));
 								if (ret < 0) {
-									ESP_LOGE(TAG, "(%d) Encryption failed: %d", fds[index], ret);
+									OS_LOGE(TAG, "(%d) Encryption failed: %d", fds[index], ret);
 									goto closefd;
 								}
 								vaild_size = ret;
@@ -653,40 +637,40 @@ static void simple_ctrl_body_handle(void)
 								load_info[4] = (uint8_t)((vaild_size >> 16) & 0xff);
 								load_info[5] = (uint8_t)((vaild_size >> 24) & 0xff);
 
-								xSemaphoreTake(send_mutex, portMAX_DELAY);
+								OS_MUTEX_LOCK(&send_mutex);
 
 								/* Send info */
 								ret = send(fds[index], load_info, sizeof(load_info), 0);
 								if (ret != sizeof(load_info)) {
-									ESP_LOGE(TAG, "(%d) Send load info fail: %d", fds[index], ret);
-									xSemaphoreGive(send_mutex);
+									OS_LOGE(TAG, "(%d) Send load info fail: %d", fds[index], ret);
+									OS_MUTEX_UNLOCK(&send_mutex);
 									goto closefd;
 								}
-								ESP_LOGD(TAG, "(%d) Send load info: %d", fds[index], ret);
+								OS_LOGD(TAG, "(%d) Send load info: %d", fds[index], ret);
 
 								/* Send data */
 								ret = send(fds[index], buffer, vaild_size, 0);
 								if (ret != vaild_size) {
-									ESP_LOGE(TAG, "(%d) Send load data fail: %d", fds[index], ret);
-									xSemaphoreGive(send_mutex);
+									OS_LOGE(TAG, "(%d) Send load data fail: %d", fds[index], ret);
+									OS_MUTEX_UNLOCK(&send_mutex);
 									goto closefd;
 								}
-								ESP_LOGD(TAG, "(%d) Send load data: %d", fds[index], ret);
+								OS_LOGD(TAG, "(%d) Send load data: %d", fds[index], ret);
 
-								xSemaphoreGive(send_mutex);
+								OS_MUTEX_UNLOCK(&send_mutex);
 							} else if (ret < 0) {
-								ESP_LOGI(TAG, "Handle exception, disconnected (%d)", fds[index]);
+								OS_LOGI(TAG, "Handle exception, disconnected (%d)", fds[index]);
 								goto closefd;
 							}
 						}
 
-						ESP_LOGI(TAG, "(%d) Handle done", fds[index]);
+						OS_LOGI(TAG, "(%d) Handle done", fds[index]);
 					} else {
-						ESP_LOGI(TAG, "Read exception or timeout, disconnected (%d)", fds[index]);
+						OS_LOGI(TAG, "Read exception or timeout, disconnected (%d)", fds[index]);
 						goto closefd;
 					}
 				} else if (sel_ret == 0) {
-					ESP_LOGI(TAG, "Select timeout, disconnected (%d)", fds[index]);
+					OS_LOGI(TAG, "Select timeout, disconnected (%d)", fds[index]);
 closefd:
 					close(fds[index]);
 					fds[index] = -1;
@@ -698,34 +682,36 @@ closefd:
 	close(body_socket);
 }
 
-static void simple_ctrl_body_task(void *pvParameters)
+static OS_THREAD_RET simple_ctrl_body_task(void *pvParameters)
 {
-	ESP_LOGI(TAG, "Ctrl Body Running");
+	OS_LOGI(TAG, "Ctrl Body Running");
 
 	while (1) {
 		simple_ctrl_body_handle();
-		vTaskDelay(pdMS_TO_TICKS(1000));
+		OS_MSLEEP(1000);
 	}
 
-	vTaskDelete(NULL);
+	OS_THREAD_EXIT();
 }
 
 void simple_ctrl_init(void)
 {
-	int ret;
+	bool ret;
 
 	simple_ctrl_init_info_id();
 
-	spiffs_load(SPIFFS_PASSWD_FILE_NAME, crypto_passwd, sizeof(crypto_passwd));
+	store_load(SOTRE_PASSWD_FILE_NAME, crypto_passwd, sizeof(crypto_passwd));
 
-	ret = xTaskCreate(simple_ctrl_discover_task, "simple_ctrl_discover_task", 2048,
-			  NULL, tskIDLE_PRIORITY + 2, &discover_handle);
-	ESP_ERROR_CHECK(ret != pdPASS);
+	OS_THREAD_CREATE(ret, &discover_handle, simple_ctrl_discover_task, NULL,
+			 "simple_ctrl_discover_task", 2048);
+	OS_ERROR_CHECK(ret != true);
 
-	send_mutex = xSemaphoreCreateMutex();
-	ret = xTaskCreate(simple_ctrl_body_task, "simple_ctrl_body_task", 4096,
-			  NULL, tskIDLE_PRIORITY + 2, NULL);
-	ESP_ERROR_CHECK(ret != pdPASS);
+	OS_MUTEX_INIT(ret, &send_mutex);
+	OS_ERROR_CHECK(ret != true);
+
+	OS_THREAD_CREATE(ret, NULL, &simple_ctrl_body_task, NULL,
+			 "simple_ctrl_body_task", 2048);
+	OS_ERROR_CHECK(ret != true);
 
 	event_bus_register(simple_ctrl_notify_callback);
 }
