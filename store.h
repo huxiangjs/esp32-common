@@ -22,19 +22,19 @@
  * SOFTWARE.
  */
 
-#ifndef __SPIFFS_H_
-#define __SPIFFS_H_
+#ifndef __STORE_H_
+#define __STORE_H_
 
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
 
-void spiffs_init(void);
-int spiffs_save(char *name, char *data, int size);
-int spiffs_load(char *name, char *buff, int size);
+void store_init(void);
+int store_save(char *name, char *data, int size);
+int store_load(char *name, char *buff, int size);
 
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */
 
-#endif /* __SPIFFS_H_ */
+#endif /* __STORE_H_ */
