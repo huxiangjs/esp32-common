@@ -155,26 +155,33 @@ static void simple_ctrl_discover_handle(void)
 	OS_LOGI(TAG, "online broadcast has been sent");
 
 	while (1) {
-		/* Wait data */
+		/*
+		 * Wait data
+		 * Note:
+		 *   On Linux, data starts being received after the `bind()` call,
+		 *   so here you can receive the packet you sent yourself.
+		 */
 		recv_len = recvfrom(discover_socket, &buffer,
 				    DISCOVER_BUFFER_SIZE - 1, 0,
 				    (struct sockaddr*)&addr_in,
 				    &addr_size);
 		if (recv_len >= 0) {
+			buffer[recv_len] = '\0';
+
+			/* If the flag is discover, then respond */
+			if(strcmp(buffer, DISCOVER_SAY))
+				continue;
+
 			OS_LOGI(TAG, "recvfrom: %s:%d",
 				 inet_ntoa(addr_in.sin_addr),
 				 ntohs(addr_in.sin_port));
 
-			buffer[recv_len] = '\0';
 			OS_LOGI(TAG, "recvdata: %s (%dbytes)", buffer, recv_len);
 
-			/* If the flag is discover, then respond */
-			if(!strcmp(buffer, DISCOVER_SAY)) {
-				simple_ctrl_discover_set_respond(buffer, sizeof(buffer));
-				sendto(discover_socket, buffer, strlen(buffer), 0,
-				       (struct sockaddr*)&addr_in, addr_size);
-				OS_LOGI(TAG, "discover has responded");
-			}
+			simple_ctrl_discover_set_respond(buffer, sizeof(buffer));
+			sendto(discover_socket, buffer, strlen(buffer), 0,
+			       (struct sockaddr*)&addr_in, addr_size);
+			OS_LOGI(TAG, "discover has responded");
 		} else {
 			OS_LOGI(TAG, "recv_len < 0, exit discover");
 			break;
