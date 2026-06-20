@@ -108,8 +108,11 @@ static void simple_ctrl_init_info_id(void)
 
 static inline void simple_ctrl_discover_set_respond(char *buf, size_t buf_size)
 {
-	/* |--MAGIC(6bytes)--|--CLASS(2bytes)--|--ID(14bytes)--|--NAME(nbytes)--| */
-	snprintf(buf, buf_size, "%s%02x%s%s", DISCOVER_RESPOND, info_class_id, info_id, info_name);
+	char has_pwd = crypto_passwd[0] ? '*' : '-';
+
+	/* |--MAGIC(6bytes)--|--CLASS(2bytes)--|--ID(14bytes)--|--(1byte)--|--NAME(nbytes)--| */
+	snprintf(buf, buf_size, "%s%02x%s%c%s", DISCOVER_RESPOND,
+		 info_class_id, info_id, has_pwd, info_name);
 }
 
 static void simple_ctrl_discover_handle(void)
