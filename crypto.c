@@ -26,19 +26,19 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <stdlib.h>
+#include <time.h>
 #include "os.h"
 #include "crypto.h"
-#ifndef USE_TINY_AES_C
-#include "mbedtls/aes.h"
-#else
 #include "tiny-AES-c/aes.h"
-#endif
 
 static const char *TAG = "CRYPTO";
 
 struct algorithm {
 	int (*en)(struct crypto *handle, char *buffer, int vaild_size, int buff_size);
 	int (*de)(struct crypto *handle, char *buffer, int vaild_size, int buff_size);
+	uint8_t head_reserve;
+	uint8_t tail_reserve;
 };
 
 static int en_none(struct crypto *handle, char *buffer, int vaild_size, int buff_size)
@@ -81,7 +81,7 @@ static int de_xor(struct crypto *handle, char *buffer, int vaild_size, int buff_
 	return do_xor(handle, buffer, vaild_size);
 }
 
-static inline int aes128ecb_check_key(struct crypto *handle)
+static inline int aes128_check_key(struct crypto *handle)
 {
 	if (handle->plen > 16) {
 		OS_LOGE(TAG, "The key length of AES128 must be 16 bytes");
@@ -91,7 +91,7 @@ static inline int aes128ecb_check_key(struct crypto *handle)
 	return 0;
 }
 
-static inline int aes128ecb_check_size(int vaild_size, int buff_size)
+static inline int aes128_check_size(int vaild_size, int buff_size)
 {
 	if ((vaild_size & 0xf) && (((vaild_size >> 4) + 1) > (buff_size >> 4))) {
 		OS_LOGE(TAG, "Not enough space in the buffer");
@@ -101,7 +101,7 @@ static inline int aes128ecb_check_size(int vaild_size, int buff_size)
 	return 0;
 }
 
-static inline void aes128ecb_fill_key(struct crypto *handle, uint8_t *key)
+static inline void aes128_fill_key(struct crypto *handle, uint8_t *key)
 {
 	if (handle->plen)
 		memcpy(key, handle->passwd, handle->plen);
@@ -111,45 +111,22 @@ static inline void aes128ecb_fill_key(struct crypto *handle, uint8_t *key)
 
 static int do_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int buff_size, bool en)
 {
-#ifndef USE_TINY_AES_C
-	mbedtls_aes_context aes;
-#else
 	struct AES_ctx ctx;
-#endif
 	uint8_t key[16];
 	int ret;
 
-	ret = aes128ecb_check_size(vaild_size, buff_size);
+	ret = aes128_check_size(vaild_size, buff_size);
 	if (ret)
 		return ret;
-	ret = aes128ecb_check_key(handle);
+	ret = aes128_check_key(handle);
 	if (ret)
 		return ret;
-	aes128ecb_fill_key(handle, key);
+	aes128_fill_key(handle, key);
 
 	ret = vaild_size & 0xf;
 	if (ret)
 		memset(buffer + vaild_size, 0, 16 - ret);
 
-#ifndef USE_TINY_AES_C
-	mbedtls_aes_init(&aes);
-	if (en) {
-		mbedtls_aes_setkey_enc(&aes, key, 128);		// 128 bits
-		for (ret = 0; ret < vaild_size; ret += 16) {
-			mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT,
-					      (uint8_t *)buffer + ret,
-					      (uint8_t *)buffer + ret);
-		}
-	} else {
-		mbedtls_aes_setkey_dec(&aes, key, 128);		// 128 bits
-		for (ret = 0; ret < vaild_size; ret += 16) {
-			mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_DECRYPT,
-					      (uint8_t *)buffer + ret,
-					      (uint8_t *)buffer + ret);
-		}
-	}
-	mbedtls_aes_free(&aes);
-#else
 	AES_init_ctx(&ctx, key);
 	if (en) {
 		for (ret = 0; ret < vaild_size; ret += 16)
@@ -158,7 +135,54 @@ static int do_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int
 		for (ret = 0; ret < vaild_size; ret += 16)
 			AES_ECB_decrypt(&ctx, (uint8_t *)buffer + ret);
 	}
-#endif
+
+	return ret;
+}
+
+static int do_aes128cbc(struct crypto *handle, char *buffer, int vaild_size, int buff_size, bool en)
+{
+	struct AES_ctx ctx;
+	uint8_t key[16];
+	uint8_t *iv;
+	int ret;
+	int i;
+
+	iv = (uint8_t *)buffer;
+	buffer += handle->head_reserve;
+	vaild_size -= handle->head_reserve;
+	buff_size -= handle->head_reserve;
+
+	ret = aes128_check_size(vaild_size, buff_size);
+	if (ret)
+		return ret;
+	ret = aes128_check_key(handle);
+	if (ret)
+		return ret;
+	aes128_fill_key(handle, key);
+
+	ret = vaild_size & 0xf;
+	if (ret) {
+		ret = 16 - ret;
+		memset(buffer + vaild_size, 0, ret);
+		vaild_size += ret;
+	}
+
+	if (en) {
+		/* init iv */
+		srand(time(NULL));
+		for (i = 0; i < 16; i++)
+			iv[i] = rand() % 256;
+	}
+
+	if (en) {
+		AES_init_ctx_iv(&ctx, key, iv);
+		AES_CBC_encrypt_buffer(&ctx, (uint8_t *)buffer, vaild_size);
+		ret = handle->head_reserve + vaild_size;
+	} else {
+		AES_init_ctx_iv(&ctx, key, iv);
+		AES_CBC_decrypt_buffer(&ctx, (uint8_t *)buffer, vaild_size);
+		ret = handle->head_reserve + vaild_size;
+	}
 
 	return ret;
 }
@@ -173,10 +197,21 @@ static int de_aes128ecb(struct crypto *handle, char *buffer, int vaild_size, int
 	return do_aes128ecb(handle, buffer, vaild_size, buff_size, false);
 }
 
+static int en_aes128cbc(struct crypto *handle, char *buffer, int vaild_size, int buff_size)
+{
+	return do_aes128cbc(handle, buffer, vaild_size, buff_size, true);
+}
+
+static int de_aes128cbc(struct crypto *handle, char *buffer, int vaild_size, int buff_size)
+{
+	return do_aes128cbc(handle, buffer, vaild_size, buff_size, false);
+}
+
 static struct algorithm list[CRYPTO_TYPE_MAX] = {
-	[CRYPTO_TYPE_NONE] = { en_none, de_none },			/* 0x00: No encryption */
-	[CRYPTO_TYPE_XOR] = { en_xor, de_xor },				/* 0x01: Simple xor replacement */
-	[CRYPTO_TYPE_AES128ECB] = { en_aes128ecb, de_aes128ecb },	/* 0x02: AES128-ECB */
+	[CRYPTO_TYPE_NONE] = { en_none, de_none, 0, 0 },		/* 0x00: No encryption */
+	[CRYPTO_TYPE_XOR] = { en_xor, de_xor, 0, 0 },			/* 0x01: Simple xor replacement */
+	[CRYPTO_TYPE_AES128ECB] = { en_aes128ecb, de_aes128ecb, 0, 0 },	/* 0x02: AES128-ECB */
+	[CRYPTO_TYPE_AES128CBC] = { en_aes128cbc, de_aes128cbc, 16, 0 },/* 0x03: AES128-CBC */
 };
 
 int crypto_en(struct crypto *handle, char *buffer, int vaild_size, int buff_size)
@@ -203,6 +238,8 @@ int crypto_init(struct crypto *handle, int type, char *passwd, int plen)
 
 	handle->count = 0;
 	handle->type = type;
+	handle->head_reserve = list[type].head_reserve;
+	handle->tail_reserve = list[type].tail_reserve;
 
 	if (passwd && plen) {
 		handle->passwd = passwd;
