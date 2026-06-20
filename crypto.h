@@ -34,13 +34,16 @@ extern "C" {
 #define CRYPTO_TYPE_NONE		0x00
 #define CRYPTO_TYPE_XOR			0x01
 #define CRYPTO_TYPE_AES128ECB		0x02
-#define CRYPTO_TYPE_MAX			0x03
+#define CRYPTO_TYPE_AES128CBC		0x03
+#define CRYPTO_TYPE_MAX			0x04
 
 struct crypto {
 	uint32_t count;
 	int type;
 	char *passwd;
 	int plen;
+	uint8_t head_reserve;
+	uint8_t tail_reserve;
 };
 
 int crypto_en(struct crypto *handle, char *buffer, int vaild_size, int buff_size);

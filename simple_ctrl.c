@@ -77,7 +77,6 @@ struct simple_ctrl_handle {
 	uint8_t load_type;
 	uint8_t crypto_type;
 	uint32_t load_len;
-	uint32_t ret_len;
 	struct crypto in_crypto;
 	struct crypto out_crypto;
 	char passwd_data[CTRL_INFO_PASSWD_LENGTH];
@@ -93,7 +92,7 @@ static uint8_t info_class_id = CLASS_ID_UNKNOWN;
 static char info_id[SIMPLE_CTRL_INFO_ID_LENGTH + 1] = SIMPLE_CTRL_INFO_ID_DEFAULT;
 
 static char crypto_passwd[1 + CTRL_INFO_PASSWD_LENGTH];
-static uint8_t crypto_type = CRYPTO_TYPE_AES128ECB;
+static uint8_t crypto_type = CRYPTO_TYPE_AES128CBC;
 
 static void simple_ctrl_init_info_id(void)
 {
@@ -110,9 +109,16 @@ static inline void simple_ctrl_discover_set_respond(char *buf, size_t buf_size)
 {
 	char has_pwd = crypto_passwd[0] ? '*' : '-';
 
-	/* |--MAGIC(6bytes)--|--CLASS(2bytes)--|--ID(14bytes)--|--(1byte)--|--NAME(nbytes)--| */
-	snprintf(buf, buf_size, "%s%02x%s%c%s", DISCOVER_RESPOND,
-		 info_class_id, info_id, has_pwd, info_name);
+	/*
+	 * MAGIC(6bytes)
+	 * CLASS(2bytes)
+	 * CRYPTO(2byte)
+	 * HAS_PW(1byte)
+	 * ID(14bytes)
+	 * NAME(nbytes)
+	 */
+	snprintf(buf, buf_size, "%s%02x%02x%c%s%s", DISCOVER_RESPOND,
+		 info_class_id, crypto_type, has_pwd, info_id, info_name);
 }
 
 static void simple_ctrl_discover_handle(void)
@@ -362,20 +368,22 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 	return ret;
 }
 
-static int simple_ctrl_handle_pad(struct simple_ctrl_handle *handle,
-				  char *buffer, int vaild_size, int buff_size)
+static int simple_ctrl_handle_pad(struct simple_ctrl_handle *handle, char *buffer, int buff_size)
 {
 	int ret;
+	int vaild_size;
 
 	if (handle->crypto_type != crypto_type) {
 		OS_LOGE(TAG, "Encryption method does not match");
 		return -1;
 	}
 
-	ret = crypto_de(&handle->in_crypto, buffer, vaild_size, buff_size);
+	ret = crypto_de(&handle->in_crypto, buffer, handle->load_len, buff_size);
 	if (ret < 0)
 		return ret;
-	vaild_size = ret;
+	buffer += handle->in_crypto.head_reserve;
+	buff_size -= handle->in_crypto.head_reserve + handle->in_crypto.tail_reserve;
+	vaild_size = ret - handle->in_crypto.head_reserve - handle->in_crypto.tail_reserve;
 
 	if ((vaild_size < CTRL_LOAD_HEADER_SIZE) ||
 	    memcmp(CTRL_LOAD_MAGIC, buffer, sizeof(CTRL_LOAD_MAGIC))) {
@@ -403,15 +411,13 @@ static int simple_ctrl_handle_pad(struct simple_ctrl_handle *handle,
 		break;
 	}
 
-	handle->ret_len = 0;
-
 	if (ret > 0) {
 		buffer[12] = (uint8_t)((ret >> 0) & 0xff);
 		buffer[13] = (uint8_t)((ret >> 8) & 0xff);
 		buffer[14] = (uint8_t)((ret >> 16) & 0xff);
 		buffer[15] = (uint8_t)((ret >> 24) & 0xff);
 		ret += CTRL_LOAD_HEADER_SIZE;
-		handle->ret_len = (uint32_t)ret;
+		ret += handle->out_crypto.head_reserve + handle->out_crypto.tail_reserve;
 	}
 
 	return ret;
@@ -512,7 +518,6 @@ static void simple_ctrl_body_handle(void)
 	char buffer[BODY_TCP_BUFFER_SIZE];
 	struct simple_ctrl_handle handle;
 	uint32_t count;
-	uint32_t size;
 	struct timeval timeout;
 
 	/* Create UDP */
@@ -610,68 +615,72 @@ static void simple_ctrl_body_handle(void)
 						OS_LOGI(TAG, "(%d) load_type:%02x, crypto_type:%02x, load_len:%u", fds[index],
 							 handle.load_type, handle.crypto_type, (unsigned int)handle.load_len);
 
+						if (handle.load_len > (uint32_t)sizeof(buffer)) {
+							OS_LOGW(TAG, "The data is too long, closed (%d)", fds[index]);
+							goto closefd;
+						}
+
 						count = 0;
 						while (count < handle.load_len) {
-							size = handle.load_len > (uint32_t)sizeof(buffer) ?
-							       sizeof(buffer) : handle.load_len;
 							/* Read pack data */
-							ret = recv(fds[index], buffer, size, 0);
+							ret = recv(fds[index], buffer, handle.load_len, 0);
 							if (ret <= 0) {
 								OS_LOGI(TAG, "Read exception or timeout, disconnected (%d)", fds[index]);
 								goto closefd;
 							}
-							OS_LOGD(TAG, "(%d) Expect: %u; Result: %d", fds[index], (unsigned int)size, ret);
+							OS_LOGD(TAG, "(%d) Expect: %u; Result: %d", fds[index],
+								(unsigned int)handle.load_len, ret);
 
 							count += ret;
 							OS_LOGD(TAG, "(%d) Handle [%u/%u]", fds[index],
-								 (unsigned int)count, (unsigned int)handle.load_len);
+								(unsigned int)count, (unsigned int)handle.load_len);
+						}
 
-							/* Handle data */
-							ret = simple_ctrl_handle_pad(&handle, buffer, ret, sizeof(buffer));
-							if (ret > 0) {
-								uint8_t load_info[6];
-								int vaild_size = ret;
+						/* Handle data */
+						ret = simple_ctrl_handle_pad(&handle, buffer, sizeof(buffer));
+						if (ret > 0) {
+							uint8_t load_info[6];
+							int vaild_size = ret;
 
-								/* Encrypto */
-								ret = crypto_en(&handle.out_crypto, buffer, vaild_size, sizeof(buffer));
-								if (ret < 0) {
-									OS_LOGE(TAG, "(%d) Encryption failed: %d", fds[index], ret);
-									goto closefd;
-								}
-								vaild_size = ret;
-
-								load_info[0] = handle.load_type;
-								load_info[1] = crypto_type;
-								load_info[2] = (uint8_t)((vaild_size >> 0) & 0xff);
-								load_info[3] = (uint8_t)((vaild_size >> 8) & 0xff);
-								load_info[4] = (uint8_t)((vaild_size >> 16) & 0xff);
-								load_info[5] = (uint8_t)((vaild_size >> 24) & 0xff);
-
-								OS_MUTEX_LOCK(&send_mutex);
-
-								/* Send info */
-								ret = send(fds[index], load_info, sizeof(load_info), 0);
-								if (ret != sizeof(load_info)) {
-									OS_LOGE(TAG, "(%d) Send load info fail: %d", fds[index], ret);
-									OS_MUTEX_UNLOCK(&send_mutex);
-									goto closefd;
-								}
-								OS_LOGD(TAG, "(%d) Send load info: %d", fds[index], ret);
-
-								/* Send data */
-								ret = send(fds[index], buffer, vaild_size, 0);
-								if (ret != vaild_size) {
-									OS_LOGE(TAG, "(%d) Send load data fail: %d", fds[index], ret);
-									OS_MUTEX_UNLOCK(&send_mutex);
-									goto closefd;
-								}
-								OS_LOGD(TAG, "(%d) Send load data: %d", fds[index], ret);
-
-								OS_MUTEX_UNLOCK(&send_mutex);
-							} else if (ret < 0) {
-								OS_LOGI(TAG, "Handle exception, disconnected (%d)", fds[index]);
+							/* Encrypto */
+							ret = crypto_en(&handle.out_crypto, buffer, vaild_size, sizeof(buffer));
+							if (ret < 0) {
+								OS_LOGE(TAG, "(%d) Encryption failed: %d", fds[index], ret);
 								goto closefd;
 							}
+							vaild_size = ret;
+
+							load_info[0] = handle.load_type;
+							load_info[1] = crypto_type;
+							load_info[2] = (uint8_t)((vaild_size >> 0) & 0xff);
+							load_info[3] = (uint8_t)((vaild_size >> 8) & 0xff);
+							load_info[4] = (uint8_t)((vaild_size >> 16) & 0xff);
+							load_info[5] = (uint8_t)((vaild_size >> 24) & 0xff);
+
+							OS_MUTEX_LOCK(&send_mutex);
+
+							/* Send info */
+							ret = send(fds[index], load_info, sizeof(load_info), 0);
+							if (ret != sizeof(load_info)) {
+								OS_LOGE(TAG, "(%d) Send load info fail: %d", fds[index], ret);
+								OS_MUTEX_UNLOCK(&send_mutex);
+								goto closefd;
+							}
+							OS_LOGD(TAG, "(%d) Send load info: %d", fds[index], ret);
+
+							/* Send data */
+							ret = send(fds[index], buffer, vaild_size, 0);
+							if (ret != vaild_size) {
+								OS_LOGE(TAG, "(%d) Send load data fail: %d", fds[index], ret);
+								OS_MUTEX_UNLOCK(&send_mutex);
+								goto closefd;
+							}
+							OS_LOGD(TAG, "(%d) Send load data: %d", fds[index], ret);
+
+							OS_MUTEX_UNLOCK(&send_mutex);
+						} else if (ret < 0) {
+							OS_LOGI(TAG, "Handle exception, disconnected (%d)", fds[index]);
+							goto closefd;
 						}
 
 						OS_LOGI(TAG, "(%d) Handle done", fds[index]);
