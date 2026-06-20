@@ -512,9 +512,6 @@ static void simple_ctrl_body_handle(void)
 	uint32_t size;
 	struct timeval timeout;
 
-	timeout.tv_sec = BODY_TCP_TIMEOUT;
-	timeout.tv_usec = 0;
-
 	/* Create UDP */
 	body_socket = socket(AF_INET, SOCK_STREAM, 0);
 	OS_ERROR_CHECK(body_socket < 0);
@@ -555,6 +552,9 @@ static void simple_ctrl_body_handle(void)
 					max_fd = fds[index];
 			}
 		}
+
+		timeout.tv_sec = BODY_TCP_TIMEOUT;
+		timeout.tv_usec = 0;
 
 		/* Wait (OK > 0; Timeout == 0; Failed < 0) */
 		sel_ret = select(max_fd + 1, &readfds, NULL, NULL, &timeout);
