@@ -75,7 +75,6 @@ static const char *TAG = "SIMPLE-CTRL";
 
 struct simple_ctrl_handle {
 	uint8_t load_type;
-	uint8_t crypto_type;
 	uint32_t load_len;
 	struct crypto in_crypto;
 	struct crypto out_crypto;
@@ -373,11 +372,6 @@ static int simple_ctrl_handle_pad(struct simple_ctrl_handle *handle, char *buffe
 	int ret;
 	int vaild_size;
 
-	if (handle->crypto_type != crypto_type) {
-		OS_LOGE(TAG, "Encryption method does not match");
-		return -1;
-	}
-
 	ret = crypto_de(&handle->in_crypto, buffer, handle->load_len, buff_size);
 	if (ret < 0)
 		return ret;
@@ -429,41 +423,46 @@ void simple_ctrl_notify(char *buffer, int size)
 {
 	int index;
 	int ret;
-	uint8_t load_info[6];
-	char header[CTRL_LOAD_HEADER_SIZE] = CTRL_LOAD_MAGIC;
+	uint8_t load_info[5];
 	char enbuf[NOTIFY_BUFFER_SIZE];
+	int ensize;
 	int load_size;
 	struct crypto handle;
-
-	if (size > NOTIFY_BUFFER_SIZE) {
-		OS_LOGE(TAG, "Not enough space in the enbuf");
-		return;
-	}
-	memcpy(enbuf, buffer, size);
+	char *data_ptr;
 
 	crypto_init(&handle, crypto_type, crypto_passwd + 1, crypto_passwd[0]);
 
-	header[12] = (uint8_t)((size >> 0) & 0xff);
-	header[13] = (uint8_t)((size >> 8) & 0xff);
-	header[14] = (uint8_t)((size >> 16) & 0xff);
-	header[15] = (uint8_t)((size >> 24) & 0xff);
-	ret = crypto_en(&handle, header, sizeof(header), sizeof(header));
-	if (ret != sizeof(header))
+	ensize = handle.head_reserve + CTRL_LOAD_HEADER_SIZE + size + handle.tail_reserve;
+	if (ensize > NOTIFY_BUFFER_SIZE) {
+		OS_LOGE(TAG, "Not enough space in the enbuf");
 		return;
-	load_size = sizeof(header);
+	}
 
-	ret = crypto_en(&handle, enbuf, size, sizeof(enbuf));
-	if (ret < 0)
+	data_ptr = enbuf + handle.head_reserve;
+	memset(data_ptr, 0, CTRL_LOAD_HEADER_SIZE);
+	memcpy(data_ptr, CTRL_LOAD_MAGIC, sizeof(CTRL_LOAD_MAGIC));
+
+	/* playload size */
+	data_ptr[12] = (uint8_t)((size >> 0) & 0xff);
+	data_ptr[13] = (uint8_t)((size >> 8) & 0xff);
+	data_ptr[14] = (uint8_t)((size >> 16) & 0xff);
+	data_ptr[15] = (uint8_t)((size >> 24) & 0xff);
+
+	/* playload data */
+	memcpy(data_ptr + CTRL_LOAD_HEADER_SIZE, buffer, size);
+
+	ret = crypto_en(&handle, enbuf, ensize, sizeof(enbuf));
+	if (ret < 0) {
+		OS_LOGE(TAG, "Encryption failed");
 		return;
-	size = ret;
-	load_size += size;
+	}
+	load_size = ret;
 
 	load_info[0] = CTRL_LOAD_TYPE_NOTIFY;
-	load_info[1] = crypto_type;
-	load_info[2] = (uint8_t)((load_size >> 0) & 0xff);
-	load_info[3] = (uint8_t)((load_size >> 8) & 0xff);
-	load_info[4] = (uint8_t)((load_size >> 16) & 0xff);
-	load_info[5] = (uint8_t)((load_size >> 24) & 0xff);
+	load_info[1] = (uint8_t)((load_size >> 0) & 0xff);
+	load_info[2] = (uint8_t)((load_size >> 8) & 0xff);
+	load_info[3] = (uint8_t)((load_size >> 16) & 0xff);
+	load_info[4] = (uint8_t)((load_size >> 24) & 0xff);
 
 	OS_LOGD(TAG, "Load size: %d", load_size);
 
@@ -479,17 +478,9 @@ void simple_ctrl_notify(char *buffer, int size)
 				continue;
 			}
 
-			/* Send header */
-			ret = send(fds[index], header, sizeof(header), 0);
-			if (ret != sizeof(header)) {
-				OS_LOGE(TAG, "Send load header fail: %d", ret);
-				OS_MUTEX_UNLOCK(&send_mutex);
-				continue;
-			}
-
 			/* Send load */
-			ret = send(fds[index], enbuf, size, 0);
-			if (ret != size) {
+			ret = send(fds[index], enbuf, load_size, 0);
+			if (ret != load_size) {
 				OS_LOGE(TAG, "Send load fail: %d", ret);
 				OS_MUTEX_UNLOCK(&send_mutex);
 				continue;
@@ -596,9 +587,9 @@ static void simple_ctrl_body_handle(void)
 			if (fds[index] != -1) {
 				if (FD_ISSET(fds[index], &readfds)) {
 					/* Read control fields */
-					ret = recv(fds[index], buffer, 6, 0);
+					ret = recv(fds[index], buffer, 5, 0);
 					if (ret > 0) {
-						if (ret < 6) {
+						if (ret < 5) {
 							OS_LOGW(TAG, "Control field size mismatch, closed (%d)", fds[index]);
 							goto closefd;
 						}
@@ -607,13 +598,12 @@ static void simple_ctrl_body_handle(void)
 
 						/* Fill parameter */
 						handle.load_type = buffer[0];
-						handle.crypto_type = buffer[1];
-						handle.load_len = (buffer[2] << 0) |
-								  (buffer[3] << 8) |
-								  (buffer[4] << 16) |
-								  (buffer[5] << 24);
-						OS_LOGI(TAG, "(%d) load_type:%02x, crypto_type:%02x, load_len:%u", fds[index],
-							 handle.load_type, handle.crypto_type, (unsigned int)handle.load_len);
+						handle.load_len = (buffer[1] << 0) |
+								  (buffer[2] << 8) |
+								  (buffer[3] << 16) |
+								  (buffer[4] << 24);
+						OS_LOGI(TAG, "(%d) load_type:%02x, load_len:%u", fds[index],
+							handle.load_type, (unsigned int)handle.load_len);
 
 						if (handle.load_len > (uint32_t)sizeof(buffer)) {
 							OS_LOGW(TAG, "The data is too long, closed (%d)", fds[index]);
@@ -639,7 +629,7 @@ static void simple_ctrl_body_handle(void)
 						/* Handle data */
 						ret = simple_ctrl_handle_pad(&handle, buffer, sizeof(buffer));
 						if (ret > 0) {
-							uint8_t load_info[6];
+							uint8_t load_info[5];
 							int vaild_size = ret;
 
 							/* Encrypto */
@@ -651,11 +641,10 @@ static void simple_ctrl_body_handle(void)
 							vaild_size = ret;
 
 							load_info[0] = handle.load_type;
-							load_info[1] = crypto_type;
-							load_info[2] = (uint8_t)((vaild_size >> 0) & 0xff);
-							load_info[3] = (uint8_t)((vaild_size >> 8) & 0xff);
-							load_info[4] = (uint8_t)((vaild_size >> 16) & 0xff);
-							load_info[5] = (uint8_t)((vaild_size >> 24) & 0xff);
+							load_info[1] = (uint8_t)((vaild_size >> 0) & 0xff);
+							load_info[2] = (uint8_t)((vaild_size >> 8) & 0xff);
+							load_info[3] = (uint8_t)((vaild_size >> 16) & 0xff);
+							load_info[4] = (uint8_t)((vaild_size >> 24) & 0xff);
 
 							OS_MUTEX_LOCK(&send_mutex);
 
