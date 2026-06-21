@@ -146,7 +146,9 @@ void keyboard_init(uint8_t *gpios, uint8_t num)
 	ret = xTaskCreate(keyboard_task, "keyboard_task", 2048, NULL, tskIDLE_PRIORITY + 2, &handle);
 	ESP_ERROR_CHECK(ret != pdPASS);
 
+#if !defined(CONFIG_IDF_TARGET_ESP8266)
 	ESP_ERROR_CHECK(gpio_install_isr_service(0));
+#endif
 	// gpio_set_intr_type(GPIO_PIN_KEYBOARD, GPIO_INTR_NEGEDGE);
 
 	for (index = 0; index < num; index++) {
