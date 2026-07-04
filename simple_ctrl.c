@@ -40,14 +40,15 @@ static const char *TAG = "SIMPLE-CTRL";
 #define SIMPLE_CTRL_INFO_NAME_DEFAULT	"Unnamed"
 #define SIMPLE_CTRL_INFO_PASSWD_LENGTH	16
 
-#define DISCOVER_UDP_PORT		54542
+#define DISCOVER_RECV_PORT		54542
+#define DISCOVER_SEND_PORT		54543
 #define DISCOVER_SAY			"HOOZZ?"
 #define DISCOVER_RESPOND		"HOOZZ:"
 #define DISCOVER_BUFFER_SIZE		(sizeof(DISCOVER_RESPOND) + 2 + SIMPLE_CTRL_INFO_ID_LENGTH + SIMPLE_CTRL_INFO_NAME_LENGTH)
 #define DISCOVER_BROADCAST_NUM		40
 #define DISCOVER_BROADCAST_ADDRESS	"255.255.255.255"
 
-#define BODY_TCP_PORT			DISCOVER_UDP_PORT
+#define BODY_TCP_PORT			54542
 #define BODY_TCP_MAX_ACCEPT		5
 #define BODY_TCP_BUFFER_SIZE		256
 #define BODY_TCP_TIMEOUT		30
@@ -144,14 +145,14 @@ static void simple_ctrl_discover_handle(void)
 
 	/* Bind port */
 	address.sin_family = AF_INET;
-	address.sin_port = htons(DISCOVER_UDP_PORT);
+	address.sin_port = htons(DISCOVER_RECV_PORT);
 	address.sin_addr.s_addr = INADDR_ANY;
 	ret = bind(discover_socket, (struct sockaddr *)&address, sizeof (address));
 	OS_ERROR_CHECK(ret < 0);
 
 	/* Full address */
 	addr_in.sin_family = AF_INET;
-	addr_in.sin_port = htons(DISCOVER_UDP_PORT);
+	addr_in.sin_port = htons(DISCOVER_SEND_PORT);
 	ret = inet_pton(AF_INET, DISCOVER_BROADCAST_ADDRESS,
 			(void *)&addr_in.sin_addr);
 	OS_ERROR_CHECK(ret < 0);
