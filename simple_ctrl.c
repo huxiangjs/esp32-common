@@ -732,14 +732,14 @@ void simple_ctrl_init(const char *name)
 	store_load(SOTRE_PASSWD_FILE_NAME, info_passwd, sizeof(info_passwd));
 
 	OS_THREAD_CREATE(ret, &discover_handle, simple_ctrl_discover_task, NULL,
-			 "simple_ctrl_discover_task", 2048);
+			 "simple_ctrl_discover_task", 2000);
 	OS_ERROR_CHECK(ret != true);
 
 	OS_MUTEX_INIT(ret, &send_mutex);
 	OS_ERROR_CHECK(ret != true);
 
 	OS_THREAD_CREATE(ret, NULL, &simple_ctrl_body_task, NULL,
-			 "simple_ctrl_body_task", 2048);
+			 "simple_ctrl_body_task", 3000);
 	OS_ERROR_CHECK(ret != true);
 
 	event_bus_register(simple_ctrl_notify_callback);
