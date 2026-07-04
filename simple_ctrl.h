@@ -31,7 +31,7 @@
 extern "C" {
 #endif
 
-void simple_ctrl_init(void);
+void simple_ctrl_init(const char *name);
 void simple_ctrl_request_register(int (*request)(char *buffer, int buf_offs, int vaild_size, int buff_size));
 void simple_ctrl_notify(char *buffer, int size);
 void simple_ctrl_set_name(const char *new_name);
