@@ -38,6 +38,7 @@ static const char *TAG = "SIMPLE-CTRL";
 #define SIMPLE_CTRL_INFO_ID_DEFAULT	"00000000000000"
 #define SIMPLE_CTRL_INFO_NAME_LENGTH	64
 #define SIMPLE_CTRL_INFO_NAME_DEFAULT	"Unnamed"
+#define SIMPLE_CTRL_INFO_PASSWD_LENGTH	16
 
 #define DISCOVER_UDP_PORT		54542
 #define DISCOVER_SAY			"HOOZZ?"
@@ -69,8 +70,7 @@ static const char *TAG = "SIMPLE-CTRL";
 #define CTRL_LOAD_MAGIC			"HOOZZ"
 #define CTRL_LOAD_HEADER_SIZE		16
 
-#define CTRL_INFO_PASSWD_LENGTH		16
-
+#define SOTRE_DEVNAME_FILE_NAME		"DEVICE-NAME"
 #define SOTRE_PASSWD_FILE_NAME		"CRYPTO-PASSWD"
 
 struct simple_ctrl_handle {
@@ -78,7 +78,7 @@ struct simple_ctrl_handle {
 	uint32_t load_len;
 	struct crypto in_crypto;
 	struct crypto out_crypto;
-	char passwd_data[CTRL_INFO_PASSWD_LENGTH];
+	char passwd_data[SIMPLE_CTRL_INFO_PASSWD_LENGTH];
 	int passwd_len;
 };
 
@@ -86,11 +86,13 @@ static int discover_socket;
 static OS_THREAD discover_handle;
 static OS_MUTEX send_mutex;
 
+static const char *default_name = SIMPLE_CTRL_INFO_NAME_DEFAULT;
+
 static char info_name[SIMPLE_CTRL_INFO_NAME_LENGTH + 1] = SIMPLE_CTRL_INFO_NAME_DEFAULT;
 static uint8_t info_class_id = CLASS_ID_UNKNOWN;
 static char info_id[SIMPLE_CTRL_INFO_ID_LENGTH + 1] = SIMPLE_CTRL_INFO_ID_DEFAULT;
 
-static char crypto_passwd[1 + CTRL_INFO_PASSWD_LENGTH];
+static char info_passwd[1 + SIMPLE_CTRL_INFO_PASSWD_LENGTH];
 static uint8_t crypto_type = CRYPTO_TYPE_AES128CBC;
 
 static void simple_ctrl_init_info_id(void)
@@ -106,7 +108,7 @@ static void simple_ctrl_init_info_id(void)
 
 static inline void simple_ctrl_discover_set_respond(char *buf, size_t buf_size)
 {
-	char has_pwd = crypto_passwd[0] ? '*' : '-';
+	char has_pwd = info_passwd[0] ? '*' : '-';
 
 	/*
 	 * MAGIC(6bytes)
@@ -222,10 +224,14 @@ static bool simple_ctrl_notify_callback(struct event_bus_msg *msg)
 		close(discover_socket);
 		break;
 	case EVENT_BUS_STOP_SMART_CONFIG:
-		OS_LOGI(TAG, "Reset password...");
-		memset(crypto_passwd, 0, sizeof(crypto_passwd));
-		store_save(SOTRE_PASSWD_FILE_NAME, crypto_passwd,
-			   sizeof(crypto_passwd));
+		OS_LOGI(TAG, "Reset name and password...");
+		memset(info_name, 0, sizeof(info_name));
+		strncpy(info_name, default_name, sizeof(info_name));
+		store_save(SOTRE_DEVNAME_FILE_NAME, info_name,
+			   sizeof(info_name));
+		memset(info_passwd, 0, sizeof(info_passwd));
+		store_save(SOTRE_PASSWD_FILE_NAME, info_passwd,
+			   sizeof(info_passwd));
 		break;
 	}
 
@@ -235,8 +241,8 @@ static bool simple_ctrl_notify_callback(struct event_bus_msg *msg)
 static void simple_ctrl_handle_reset(struct simple_ctrl_handle *handle)
 {
 	memset(handle, 0, sizeof(struct simple_ctrl_handle));
-	memcpy(handle->passwd_data, crypto_passwd + 1, crypto_passwd[0]);
-	handle->passwd_len = crypto_passwd[0];
+	memcpy(handle->passwd_data, info_passwd + 1, info_passwd[0]);
+	handle->passwd_len = info_passwd[0];
 	crypto_init(&handle->in_crypto, crypto_type, handle->passwd_data, handle->passwd_len);
 	crypto_init(&handle->out_crypto, crypto_type, handle->passwd_data, handle->passwd_len);
 }
@@ -323,8 +329,17 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 		} else {
 			memcpy(info_name, buffer + buf_offs + 1, len);
 			info_name[len] = '\0';
-			buffer[buf_offs + 1] = CTRL_RETURN_OK;
-			ret = 2;
+			ret = store_save(SOTRE_DEVNAME_FILE_NAME, info_name,
+					 sizeof(info_name));
+			if (ret) {
+				buffer[buf_offs + 1] = CTRL_RETURN_FAIL;
+				ret = 2;
+				OS_LOGE(TAG, "Device name saving failed");
+			} else {
+				buffer[buf_offs + 1] = CTRL_RETURN_OK;
+				ret = 2;
+				OS_LOGI(TAG, "Device name has been changed");
+			}
 		}
 		break;
 	case CTRL_INFO_TYPE_GETCLASSID:
@@ -338,15 +353,15 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 		break;
 	case CTRL_INFO_TYPE_SETPASSWD:
 		len = vaild_size - 1;
-		if (len > CTRL_INFO_PASSWD_LENGTH) {
+		if (len > SIMPLE_CTRL_INFO_PASSWD_LENGTH) {
 			buffer[buf_offs + 1] = CTRL_RETURN_FAIL;
 			ret = 2;
 			OS_LOGE(TAG, "Password is too long");
 		} else {
-			memcpy(crypto_passwd + 1, buffer + buf_offs + 1, len);
-			crypto_passwd[0] = (char)len;
-			ret = store_save(SOTRE_PASSWD_FILE_NAME, crypto_passwd,
-					 sizeof(crypto_passwd));
+			memcpy(info_passwd + 1, buffer + buf_offs + 1, len);
+			info_passwd[0] = (char)len;
+			ret = store_save(SOTRE_PASSWD_FILE_NAME, info_passwd,
+					 sizeof(info_passwd));
 			if (ret) {
 				buffer[buf_offs + 1] = CTRL_RETURN_FAIL;
 				ret = 2;
@@ -430,7 +445,7 @@ void simple_ctrl_notify(char *buffer, int size)
 	struct crypto handle;
 	char *data_ptr;
 
-	crypto_init(&handle, crypto_type, crypto_passwd + 1, crypto_passwd[0]);
+	crypto_init(&handle, crypto_type, info_passwd + 1, info_passwd[0]);
 
 	ensize = handle.head_reserve + CTRL_LOAD_HEADER_SIZE + size + handle.tail_reserve;
 	if (ensize > NOTIFY_BUFFER_SIZE) {
@@ -702,13 +717,19 @@ static OS_THREAD_RET simple_ctrl_body_task(void *pvParameters)
 	OS_THREAD_EXIT();
 }
 
-void simple_ctrl_init(void)
+void simple_ctrl_init(const char *name)
 {
 	bool ret;
 
+	if (name) {
+		default_name = name;
+		simple_ctrl_set_name(default_name);
+	}
+
 	simple_ctrl_init_info_id();
 
-	store_load(SOTRE_PASSWD_FILE_NAME, crypto_passwd, sizeof(crypto_passwd));
+	store_load(SOTRE_DEVNAME_FILE_NAME, info_name, sizeof(info_name));
+	store_load(SOTRE_PASSWD_FILE_NAME, info_passwd, sizeof(info_passwd));
 
 	OS_THREAD_CREATE(ret, &discover_handle, simple_ctrl_discover_task, NULL,
 			 "simple_ctrl_discover_task", 2048);
