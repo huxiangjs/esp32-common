@@ -83,7 +83,7 @@ struct simple_ctrl_handle {
 	int passwd_len;
 };
 
-static int discover_socket;
+static int discover_socket = -1;
 static OS_THREAD discover_handle;
 static OS_MUTEX send_mutex;
 
@@ -222,7 +222,8 @@ static bool simple_ctrl_notify_callback(struct event_bus_msg *msg)
 		OS_THREAD_WAKEUP(&discover_handle);
 		break;
 	case EVENT_BUS_WIFI_DISCONNECTED:
-		close(discover_socket);
+		if (discover_socket >= 0)
+			close(discover_socket);
 		break;
 	case EVENT_BUS_STOP_SMART_CONFIG:
 		OS_LOGI(TAG, "Reset name and password...");
