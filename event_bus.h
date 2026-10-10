@@ -44,8 +44,8 @@ extern "C" {
 #define EVENT_BUS_SENSOR_BRIGHTNESS_UPDATED	0x09	// Brightness updated
 #define EVENT_BUS_SENSOR_HUMIDITY_UPDATED	0x0a	// Humidity updated
 #define EVENT_BUS_SENSOR_TEMPERATURE_UPDATED	0x0b	// Temperature updated
-#define EVENT_BUS_SENSOR_VOC_UPDATED		0x0c	// VOC (tVOC) updated
-#define EVENT_BUS_SENSOR_CO2_UPDATED		0x0d	// CO2 equivalent updated
+#define EVENT_BUS_SENSOR_TVOC_UPDATED		0x0c	// VOC (tVOC) updated
+#define EVENT_BUS_SENSOR_CO2EQ_UPDATED		0x0d	// CO2 equivalent updated
 
 struct event_bus_msg {
 	uint8_t type;
