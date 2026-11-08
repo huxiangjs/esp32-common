@@ -31,5 +31,6 @@
 #define CLASS_ID_SMART_IR		0x03	/* Smart IR class */
 #define CLASS_ID_SENSOR			0x04	/* Sensor class */
 #define CLASS_ID_PWD_SYNC		0x05	/* Password sync class */
+#define CLASS_ID_SWITCH			0x06	/* Switch class */
 
 #endif /* __CLASS_ID_H_ */
