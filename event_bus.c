@@ -32,7 +32,7 @@
 static const char *TAG = "EVENT-BUS";
 
 /* Maximum number of events */
-#define MAX_EVENT_NUM		10
+#define MAX_EVENT_NUM		20
 
 static OS_QUEUE queue;
 static OS_MUTEX register_mutex;

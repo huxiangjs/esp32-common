@@ -46,6 +46,10 @@ extern "C" {
 #define EVENT_BUS_SENSOR_TEMPERATURE_UPDATED	0x0b	// Temperature updated
 #define EVENT_BUS_SENSOR_TVOC_UPDATED		0x0c	// VOC (tVOC) updated
 #define EVENT_BUS_SENSOR_CO2EQ_UPDATED		0x0d	// CO2 equivalent updated
+#define EVENT_BUS_MEASURE_VOLTAGE_UPDATED	0x0e	// Voltage updated
+#define EVENT_BUS_MEASURE_CURRENT_UPDATED	0x0f	// Current updated
+#define EVENT_BUS_MEASURE_POWER_UPDATED		0x10	// Power updated
+#define EVENT_BUS_MEASURE_ENERGY_UPDATED	0x11	// Energy updated
 
 struct event_bus_msg {
 	uint8_t type;
