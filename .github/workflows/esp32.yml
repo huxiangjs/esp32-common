@@ -57,6 +57,7 @@ jobs:
         cd tmp
         cp -r ../esp-idf/examples/get-started/hello_world/* .
         cp -r ../esp32-common/* main/
+        tree
         cat << EOF > main/CMakeLists.txt 
         file(GLOB SOURCES_LIST "*.c")
         idf_component_register(
