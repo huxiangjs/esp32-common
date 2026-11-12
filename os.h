@@ -35,9 +35,11 @@ extern "C" {
 #if defined(__linux__)
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <assert.h>
 #include <pthread.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -123,6 +125,28 @@ struct linux_pipe {
 
 void os_get_fixed_id(uint8_t *id);
 
+/* Milliseconds since boot (unsigned wrap-around is fine for timeouts) */
+static inline uint32_t os_get_time_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (uint32_t)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+}
+
+/* Fill `buf` with `len` random bytes */
+static inline void os_fill_random(uint8_t *buf, int len)
+{
+	static bool seeded = false;
+
+	if (!seeded) {
+		srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
+		seeded = true;
+	}
+	while (len-- > 0)
+		*buf++ = (uint8_t)rand();
+}
+
 #else /* ESP32 OR ESP8266 */
 
 #include <freertos/FreeRTOS.h>
@@ -133,6 +157,7 @@ void os_get_fixed_id(uint8_t *id);
 #include <lwip/dns.h>
 #include <lwip/netdb.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #if defined(CONFIG_IDF_TARGET_ESP8266)
 # include <esp_wifi.h>
 #else
@@ -186,6 +211,19 @@ static inline void os_get_fixed_id(uint8_t *id)
 #else
 	ESP_ERROR_CHECK(esp_read_mac(id, ESP_MAC_WIFI_STA) != ESP_OK);
 #endif /* CONFIG_IDF_TARGET_ESP8266 */
+}
+
+/* Milliseconds since boot (unsigned wrap-around is fine for timeouts) */
+static inline uint32_t os_get_time_ms(void)
+{
+	return (uint32_t)((uint64_t)xTaskGetTickCount() * (uint64_t)portTICK_PERIOD_MS);
+}
+
+/* Fill `buf` with `len` random bytes */
+static inline void os_fill_random(uint8_t *buf, int len)
+{
+	while (len-- > 0)
+		*buf++ = (uint8_t)esp_random();
 }
 
 #endif /* __linux__ */
