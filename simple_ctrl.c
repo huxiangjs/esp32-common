@@ -26,6 +26,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <string.h>
+#include <errno.h>
 #include "os.h"
 #include "event_bus.h"
 #include "crypto.h"
@@ -526,7 +527,9 @@ static void simple_ctrl_body_handle(void)
 	char buffer[BODY_TCP_BUFFER_SIZE];
 	struct simple_ctrl_handle handle;
 	uint32_t count;
+	uint32_t msg_deadline;
 	struct timeval timeout;
+	struct timeval rcv_timeout;
 
 	/* Create UDP */
 	body_socket = socket(AF_INET, SOCK_STREAM, 0);
@@ -590,8 +593,13 @@ static void simple_ctrl_body_handle(void)
 
 			for (index = 0; (index < BODY_TCP_MAX_ACCEPT) && (fds[index] != -1); index++);
 			if (index < BODY_TCP_MAX_ACCEPT) {
-				/* Set read timeout */
-				setsockopt(newconn, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+				/* Set read timeout. Use a dedicated timeval: the select()
+				 * timeout above is mutated by select(), so reusing it here
+				 * could hand the new socket a near-zero SO_RCVTIMEO. */
+				rcv_timeout.tv_sec = BODY_TCP_TIMEOUT;
+				rcv_timeout.tv_usec = 0;
+				setsockopt(newconn, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout,
+						sizeof(rcv_timeout));
 				fds[index] = newconn;
 			} else {
 				OS_LOGW(TAG, "The connection has reached the set maximum");
@@ -628,11 +636,39 @@ static void simple_ctrl_body_handle(void)
 						}
 
 						count = 0;
+						msg_deadline = os_get_time_ms() + BODY_TCP_TIMEOUT * 1000U;
 						while (count < handle.load_len) {
 							/* Read pack data */
 							ret = recv(fds[index], buffer, handle.load_len, 0);
-							if (ret <= 0) {
-								OS_LOGI(TAG, "Read exception or timeout, disconnected (%d)", fds[index]);
+							if (ret == 0) {
+								/* The peer closed the connection */
+								OS_LOGI(TAG, "Peer closed mid-message, disconnected (%d)",
+									fds[index]);
+								goto closefd;
+							}
+							if (ret < 0) {
+								if (errno == EINTR ||
+										errno == EAGAIN || errno == EWOULDBLOCK) {
+									/* A spurious readable event with no data
+									 * yet (or an interrupted read): retry the
+									 * read, but only while the whole message
+									 * is still within its budget. recv() is
+									 * already paced by SO_RCVTIMEO, so a peer
+									 * that stalls mid-message hits the
+									 * deadline on its first EAGAIN and is
+									 * dropped instead of holding this fd --
+									 * and the other connections -- forever */
+									if ((int32_t)(os_get_time_ms() - msg_deadline) < 0) {
+										OS_LOGW(TAG, "Read would block, retrying (%d)",
+											fds[index]);
+										continue;
+									}
+									OS_LOGW(TAG, "Message stalled past the deadline, disconnected (%d)",
+										fds[index]);
+									goto closefd;
+								}
+								OS_LOGE(TAG, "Read error, disconnected (%d): %d",
+									fds[index], errno);
 								goto closefd;
 							}
 							OS_LOGD(TAG, "(%d) Expect: %u; Result: %d", fds[index],
@@ -690,8 +726,21 @@ static void simple_ctrl_body_handle(void)
 						}
 
 						OS_LOGI(TAG, "(%d) Handle done", fds[index]);
+					} else if (ret == 0) {
+						/* The peer closed the connection */
+						OS_LOGI(TAG, "Peer closed, disconnected (%d)", fds[index]);
+						goto closefd;
+					} else if (errno == EAGAIN || errno == EWOULDBLOCK) {
+						/* A spurious readable event with no data yet: the
+						 * peer is still there, retry on the next pass instead
+						 * of dropping the connection */
+						OS_LOGW(TAG, "Read would block, retrying (%d)", fds[index]);
+						continue;
+					} else if (errno == EINTR) {
+						continue;
 					} else {
-						OS_LOGI(TAG, "Read exception or timeout, disconnected (%d)", fds[index]);
+						OS_LOGE(TAG, "Read error, disconnected (%d): %d",
+							fds[index], errno);
 						goto closefd;
 					}
 				} else if (sel_ret == 0) {
