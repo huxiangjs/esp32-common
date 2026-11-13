@@ -26,6 +26,7 @@
 #define __SIMPLE_CTRL_H_
 
 #include "class_id.h"
+#include "ota.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,6 +37,15 @@ void simple_ctrl_request_register(int (*request)(char *buffer, int buf_offs, int
 void simple_ctrl_notify(char *buffer, int size);
 void simple_ctrl_set_name(const char *new_name);
 void simple_ctrl_set_class_id(uint8_t new_id);
+/*
+ * Enable OTA: store the firmware version (for the FW_VERSION command), the
+ * supported transports (for the FW_UPGRADE command) and the platform image
+ * backend (where the downloaded image goes). Call once at startup, after
+ * the backend's storage is initialized (ESP8266: after nvs_flash_init()).
+ */
+void simple_ctrl_ota_enable(const char *version,
+			    const struct ota_transport *transports,
+			    uint8_t count, const struct ota_flash *flash);
 
 #ifdef __cplusplus
 }

@@ -32,6 +32,7 @@
 #include "crypto.h"
 #include "class_id.h"
 #include "store.h"
+#include "ota.h"
 
 static const char *TAG = "SIMPLE-CTRL";
 
@@ -65,6 +66,9 @@ static const char *TAG = "SIMPLE-CTRL";
 #define CTRL_INFO_TYPE_SETNAME		0x01
 #define CTRL_INFO_TYPE_GETCLASSID	0x02
 #define CTRL_INFO_TYPE_SETPASSWD	0x03
+#define CTRL_INFO_TYPE_FW_VERSION	0x04
+#define CTRL_INFO_TYPE_FW_UPGRADE	0x05
+#define CTRL_INFO_TYPE_FW_PROGRESS	0x06
 
 #define CTRL_RETURN_OK			0x00
 #define CTRL_RETURN_FAIL		0x01
@@ -304,6 +308,7 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 {
 	size_t len;
 	int ret = -1;
+	int upg_ret;
 	uint8_t info_cmd;
 
 	if (vaild_size < 1) {
@@ -376,6 +381,45 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 			}
 		}
 		break;
+	case CTRL_INFO_TYPE_FW_VERSION:
+		/* Response: [cmd, ret, version...] (the git hash, set via
+		 * simple_ctrl_ota_enable) */
+		len = strlen(ota_get_version());
+		if ((len + 2) > (buff_size - buf_offs)) {
+			OS_LOGE(TAG, "Buffer does not have enough space");
+			return -1;
+		}
+		buffer[buf_offs + 1] = CTRL_RETURN_OK;
+		memcpy(buffer + buf_offs + 2, ota_get_version(), len);
+		ret = 2 + (int)len;
+		break;
+	case CTRL_INFO_TYPE_FW_UPGRADE:
+		/* Request: [cmd, url...]. The url selects the transport by
+		 * scheme; for "hoozz" it is "hoozz://<key>/<port>". ota_upgrade()
+		 * copies the url into its own storage (so this buffer can be
+		 * reused right away) and only validates it and starts the
+		 * transfer task (no blocking here).
+		 * Response: [cmd, ret] */
+		len = vaild_size - 1;
+		if (len <= 0) {
+			buffer[buf_offs + 1] = CTRL_RETURN_FAIL;
+			ret = 2;
+			break;
+		}
+		upg_ret = ota_upgrade(buffer + buf_offs + 1, (uint32_t)len);
+		buffer[buf_offs + 1] = upg_ret == 0 ? CTRL_RETURN_OK : CTRL_RETURN_FAIL;
+		ret = 2;
+		break;
+	case CTRL_INFO_TYPE_FW_PROGRESS:
+		/* Response: [cmd, ret, progress(0-100)] */
+		ret = 3;
+		if (ret > (buff_size - buf_offs)) {
+			OS_LOGE(TAG, "Buffer does not have enough space");
+			return -1;
+		}
+		buffer[buf_offs + 1] = CTRL_RETURN_OK;
+		buffer[buf_offs + 2] = ota_get_progress();
+		break;
 	default:
 		buffer[buf_offs + 1] = CTRL_RETURN_FAIL;
 		ret = 2;
@@ -436,6 +480,8 @@ static int simple_ctrl_handle_pad(struct simple_ctrl_handle *handle, char *buffe
 }
 
 static volatile int fds[BODY_TCP_MAX_ACCEPT];
+/* Last activity (ms) of each fd, for the per-connection idle timeout */
+static uint32_t fd_active_ms[BODY_TCP_MAX_ACCEPT];
 
 void simple_ctrl_notify(char *buffer, int size)
 {
@@ -555,8 +601,10 @@ static void simple_ctrl_body_handle(void)
 	OS_ERROR_CHECK(ret < 0);
 
 	/* Initialize all to invalid */
-	for (index = 0; index < BODY_TCP_MAX_ACCEPT; index++)
+	for (index = 0; index < BODY_TCP_MAX_ACCEPT; index++) {
 		fds[index] = -1;
+		fd_active_ms[index] = 0;
+	}
 
 	while (1) {
 		/* Set select */
@@ -601,6 +649,7 @@ static void simple_ctrl_body_handle(void)
 				setsockopt(newconn, SOL_SOCKET, SO_RCVTIMEO, &rcv_timeout,
 						sizeof(rcv_timeout));
 				fds[index] = newconn;
+				fd_active_ms[index] = os_get_time_ms();
 			} else {
 				OS_LOGW(TAG, "The connection has reached the set maximum");
 				close(newconn);
@@ -614,6 +663,7 @@ static void simple_ctrl_body_handle(void)
 					/* Read control fields */
 					ret = recv(fds[index], buffer, 5, 0);
 					if (ret > 0) {
+						fd_active_ms[index] = os_get_time_ms();
 						if (ret < 5) {
 							OS_LOGW(TAG, "Control field size mismatch, closed (%d)", fds[index]);
 							goto closefd;
@@ -638,8 +688,14 @@ static void simple_ctrl_body_handle(void)
 						count = 0;
 						msg_deadline = os_get_time_ms() + BODY_TCP_TIMEOUT * 1000U;
 						while (count < handle.load_len) {
-							/* Read pack data */
-							ret = recv(fds[index], buffer, handle.load_len, 0);
+							/* Read pack data. Append at the current offset:
+							 * TCP does not preserve message boundaries, so a
+							 * single message may arrive in several chunks;
+							 * writing every chunk at buffer[0] would let the
+							 * last chunk clobber the earlier ones and break
+							 * the decryption ("Magic is incorrect") */
+							ret = recv(fds[index], buffer + count,
+								(int)(handle.load_len - count), 0);
 							if (ret == 0) {
 								/* The peer closed the connection */
 								OS_LOGI(TAG, "Peer closed mid-message, disconnected (%d)",
@@ -743,12 +799,26 @@ static void simple_ctrl_body_handle(void)
 							fds[index], errno);
 						goto closefd;
 					}
-				} else if (sel_ret == 0) {
-					OS_LOGI(TAG, "Select timeout, disconnected (%d)", fds[index]);
-closefd:
-					close(fds[index]);
-					fds[index] = -1;
+				} else if ((int32_t)(os_get_time_ms() - fd_active_ms[index]) >=
+						(int32_t)(BODY_TCP_TIMEOUT * 1000U)) {
+					/* Per-connection idle timeout: no data has arrived for
+					 * BODY_TCP_TIMEOUT seconds and nothing is pending (if
+					 * there were, the branch above would have read it and
+					 * the timer would refresh). The old code closed every
+					 * connection when the global select() timed out, but
+					 * that timeout never fired while any client was active,
+					 * so dead connections held their slots forever and new
+					 * clients were refused ("reached the set maximum")
+					 */
+					OS_LOGI(TAG, "Idle timeout, disconnected (%d)", fds[index]);
+					goto closefd;
 				}
+				/* Normal exit: the fd stays open (only the error paths and
+				 * the idle timeout above close it) */
+				continue;
+closefd:
+				close(fds[index]);
+				fds[index] = -1;
 			}
 		}
 	}
@@ -766,6 +836,20 @@ static OS_THREAD_RET simple_ctrl_body_task(void *pvParameters)
 	}
 
 	OS_THREAD_EXIT();
+}
+
+void simple_ctrl_ota_enable(const char *version,
+			    const struct ota_transport *transports,
+			    uint8_t count, const struct ota_flash *flash)
+{
+	/*
+	 * The version is stored for the FW_VERSION command, the transports
+	 * for the FW_UPGRADE command and the flash backend decides where
+	 * the downloaded image goes; ota_enable() also runs the backend's
+	 * first-boot validation, so this must be called after the backend's
+	 * storage is initialized (ESP8266: after nvs_flash_init()).
+	 */
+	ota_enable(version, transports, count, flash);
 }
 
 void simple_ctrl_init(const char *name)
