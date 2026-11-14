@@ -840,7 +840,8 @@ static OS_THREAD_RET simple_ctrl_body_task(void *pvParameters)
 
 void simple_ctrl_ota_enable(const char *version,
 			    const struct ota_transport *transports,
-			    uint8_t count, const struct ota_flash *flash)
+			    uint8_t count, const struct ota_flash *flash,
+			    void (*pre_restart)(void))
 {
 	/*
 	 * The version is stored for the FW_VERSION command, the transports
@@ -849,7 +850,7 @@ void simple_ctrl_ota_enable(const char *version,
 	 * first-boot validation, so this must be called after the backend's
 	 * storage is initialized (ESP8266: after nvs_flash_init()).
 	 */
-	ota_enable(version, transports, count, flash);
+	ota_enable(version, transports, count, flash, pre_restart);
 }
 
 void simple_ctrl_init(const char *name)

@@ -128,15 +128,25 @@ struct ota_flash {
 
 /*
  * Enable OTA: store the current firmware version, the list of supported
- * transports and the platform image backend, then run the first-boot
- * validation (the backend's one).
+ * transports, the platform image backend and the optional pre-restart
+ * callback, then run the first-boot validation (the backend's one).
  *
- * Must be called once at startup, after the backend's storage is initialized
- * (ESP8266: after nvs_flash_init()).
+ * [pre_restart] is an optional callback the transfer task runs right
+ * before it restarts the device into the new image (after the transfer
+ * has succeeded and committed). Apps use it to bring their own
+ * peripherals to a clean state ahead of the reboot, e.g. stopping I2C
+ * sensor polling tasks so no I2C transaction is in flight when the chip
+ * reboots (a warm reboot with an I2C transaction in progress can leave
+ * the bus locked). It runs in the transfer task context and may block
+ * for a bounded time (a few seconds) while it stops the app's tasks;
+ * NULL (the default) disables the hook.
+ *
+ * Must be called once at startup, after the backend's storage is
+ * initialized (ESP8266: after nvs_flash_init()).
  */
 void ota_enable(const char *version,
 		const struct ota_transport *transports, uint8_t count,
-		const struct ota_flash *flash);
+		const struct ota_flash *flash, void (*pre_restart)(void));
 
 /* The stored firmware version string (the argument to ota_enable). */
 const char *ota_get_version(void);

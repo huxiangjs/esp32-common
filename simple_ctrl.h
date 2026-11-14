@@ -39,13 +39,17 @@ void simple_ctrl_set_name(const char *new_name);
 void simple_ctrl_set_class_id(uint8_t new_id);
 /*
  * Enable OTA: store the firmware version (for the FW_VERSION command), the
- * supported transports (for the FW_UPGRADE command) and the platform image
- * backend (where the downloaded image goes). Call once at startup, after
- * the backend's storage is initialized (ESP8266: after nvs_flash_init()).
+ * supported transports (for the FW_UPGRADE command), the platform image
+ * backend (where the downloaded image goes) and the optional pre-restart
+ * callback (run by the transfer task right before the reboot into the new
+ * image, so the app can clean up its peripherals; see ota_enable()). Call
+ * once at startup, after the backend's storage is initialized (ESP8266:
+ * after nvs_flash_init()).
  */
 void simple_ctrl_ota_enable(const char *version,
 			    const struct ota_transport *transports,
-			    uint8_t count, const struct ota_flash *flash);
+			    uint8_t count, const struct ota_flash *flash,
+			    void (*pre_restart)(void));
 
 #ifdef __cplusplus
 }

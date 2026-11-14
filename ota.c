@@ -79,6 +79,9 @@ static const struct ota_transport *ota_transports;
 static uint8_t ota_transport_count;
 static const struct ota_flash *ota_flash;
 
+/* Optional pre-restart callback, set by ota_enable(). */
+static void (*ota_pre_restart)(void);
+
 /* Shared with the simple_ctrl progress query. */
 static volatile uint8_t ota_progress = 0;
 static volatile bool ota_busy = false;
@@ -349,6 +352,17 @@ static void ota_transfer_task(void *arg)
 
 	/* Restart into the new image */
 	ota_progress = 100;
+
+	/*
+	 * Let the app bring its peripherals to a clean state right before
+	 * the reboot (see the [pre_restart] argument of ota_enable()): no
+	 * app task may touch a peripheral whose state a warm reboot does
+	 * not fully reset (an I2C bus, for example) in flight when the
+	 * chip restarts.
+	 */
+	if (ota_pre_restart)
+		ota_pre_restart();
+
 	OS_LOGI(TAG, "OTA complete, restarting in %d ms", OTA_RESTART_DELAY_MS);
 	OS_MSLEEP(OTA_RESTART_DELAY_MS);
 	f->restart();
@@ -414,12 +428,14 @@ uint8_t ota_get_progress(void)
 }
 
 void ota_enable(const char *version, const struct ota_transport *transports,
-		uint8_t count, const struct ota_flash *flash)
+		uint8_t count, const struct ota_flash *flash,
+		void (*pre_restart)(void))
 {
 	ota_version = version ? version : "unknown";
 	ota_transports = transports;
 	ota_transport_count = count;
 	ota_flash = flash;
+	ota_pre_restart = pre_restart;
 
 	OS_LOGI(TAG, "OTA enabled, version %s, %u transport(s)",
 		 ota_version, (unsigned)count);
