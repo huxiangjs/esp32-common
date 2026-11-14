@@ -31,13 +31,15 @@
  */
 
 #include <stdint.h>
-#include <stdbool.h>
 
 #include "ota.h"
 #include "ota_flash.h"
-#include "os.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
+#include <esp_log.h>
+#include <esp_system.h>
 #include <nvs.h>
 
 static const char *TAG = "OTA-FLASH";
@@ -112,11 +114,11 @@ static void ota_nvs_clear_pending(void)
  */
 static void ota_validation_task(void *arg)
 {
-	OS_MSLEEP(OTA_VALIDATE_TIMEOUT_MS);
+	vTaskDelay(pdMS_TO_TICKS(OTA_VALIDATE_TIMEOUT_MS));
 	ota_nvs_clear_pending();
-	OS_LOGI(TAG, "First boot OK after %d ms, new image marked valid",
+	ESP_LOGI(TAG, "First boot OK after %d ms, new image marked valid",
 		 OTA_VALIDATE_TIMEOUT_MS);
-	OS_THREAD_EXIT();
+	vTaskDelete(NULL);
 }
 
 /*
@@ -129,7 +131,6 @@ static void ota_first_boot_check(void)
 	ota_nvs_handle_t h;
 	const esp_partition_t *running, *prev;
 	uint8_t pending = 0, attempt = 0;
-	bool ok;
 
 	if (nvs_open(OTA_NVS_NAMESPACE, NVS_READONLY, &h) != ESP_OK)
 		return;
@@ -141,7 +142,7 @@ static void ota_first_boot_check(void)
 		return;
 
 	attempt++;
-	OS_LOGI(TAG, "First boot of new image, attempt %u/%u",
+	ESP_LOGI(TAG, "First boot of new image, attempt %u/%u",
 		 (unsigned)attempt, OTA_MAX_BOOT_ATTEMPTS);
 
 	if (attempt >= OTA_MAX_BOOT_ATTEMPTS) {
@@ -151,12 +152,12 @@ static void ota_first_boot_check(void)
 		 */
 		running = esp_ota_get_running_partition();
 		prev = esp_ota_get_next_update_partition(running);
-		OS_LOGE(TAG, "Too many failed boots, rolling back to %s",
+		ESP_LOGE(TAG, "Too many failed boots, rolling back to %s",
 			 prev ? prev->label : "unknown");
 		/* If the switch itself fails there is nothing else to do
 		 * (reboot into the same broken image), just make it visible */
 		if (prev && esp_ota_set_boot_partition(prev) != ESP_OK)
-			OS_LOGE(TAG, "Rollback failed: set_boot_partition error");
+			ESP_LOGE(TAG, "Rollback failed: set_boot_partition error");
 		ota_nvs_clear_pending();
 		esp_restart();
 	}
@@ -168,10 +169,16 @@ static void ota_first_boot_check(void)
 		nvs_close(h);
 	}
 
-	OS_THREAD_CREATE(ok, NULL, ota_validation_task, NULL,
-			"ota_validate", 3072);
-	if (!ok)
-		OS_LOGE(TAG, "Failed to start first-boot validation task");
+	/*
+	 * The task only sleeps, makes a few NVS calls and deletes itself,
+	 * so 2 KB is plenty. xTaskCreate takes the stack size in BYTES on
+	 * both SDKs (the ESP8266 port defines StackType_t as one byte, the
+	 * ESP32 port documents the parameter as "NUMBER OF BYTES"), so the
+	 * same value works on both.
+	 */
+	if (xTaskCreate(ota_validation_task, "ota_validate", 2048, NULL,
+			tskIDLE_PRIORITY + 2, NULL) != pdPASS)
+		ESP_LOGE(TAG, "Failed to start first-boot validation task");
 }
 
 /* --- image write (esp_ota_* into the other OTA partition) --- */
@@ -184,14 +191,14 @@ static int ota_image_begin(uint32_t image_size, void **handle)
 
 	next = esp_ota_get_next_update_partition(esp_ota_get_running_partition());
 	if (!next) {
-		OS_LOGE(TAG, "No OTA update partition");
+		ESP_LOGE(TAG, "No OTA update partition");
 		return -1;
 	}
-	OS_LOGI(TAG, "Writing image to partition %s", next->label);
+	ESP_LOGI(TAG, "Writing image to partition %s", next->label);
 
 	ret = esp_ota_begin(next, (size_t)image_size, &h);
 	if (ret != ESP_OK) {
-		OS_LOGE(TAG, "esp_ota_begin failed: 0x%x", ret);
+		ESP_LOGE(TAG, "esp_ota_begin failed: 0x%x", ret);
 		return -1;
 	}
 	ota_handle = h;
@@ -208,7 +215,7 @@ static int ota_image_write(void *handle, const uint8_t *data, uint32_t size)
 		return -1;
 	ret = esp_ota_write(ota_handle, data, (size_t)size);
 	if (ret != ESP_OK) {
-		OS_LOGE(TAG, "esp_ota_write failed: 0x%x", ret);
+		ESP_LOGE(TAG, "esp_ota_write failed: 0x%x", ret);
 		return -1;
 	}
 	return 0;
@@ -222,7 +229,7 @@ static int ota_image_end(void *handle)
 		return -1;
 	ret = esp_ota_end(ota_handle);
 	if (ret != ESP_OK) {
-		OS_LOGE(TAG, "esp_ota_end (verify) failed: 0x%x", ret);
+		ESP_LOGE(TAG, "esp_ota_end (verify) failed: 0x%x", ret);
 		return -1;
 	}
 	return 0;
@@ -240,7 +247,7 @@ static int ota_commit(void)
 	if (!next)
 		return -1;
 	if (esp_ota_set_boot_partition(next) != ESP_OK) {
-		OS_LOGE(TAG, "esp_ota_set_boot_partition failed");
+		ESP_LOGE(TAG, "esp_ota_set_boot_partition failed");
 		return -1;
 	}
 	ota_nvs_mark_pending();
