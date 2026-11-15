@@ -377,6 +377,29 @@ fail:
 	OS_THREAD_EXIT();
 }
 
+/*
+ * One-shot task of ota_restart(): it gives the caller (the simple_ctrl
+ * control channel) a moment to flush the FW_RESTART acknowledgement to
+ * the app, then runs the pre-restart callback (see the [pre_restart]
+ * argument of ota_enable(): no app task may touch a peripheral whose
+ * state a warm restart does not fully reset, an I2C bus for example, in
+ * flight when the chip restarts) and restarts via the image backend.
+ */
+static void ota_restart_task(void *arg)
+{
+	OS_MSLEEP(300);
+
+	if (ota_pre_restart)
+		ota_pre_restart();
+
+	OS_LOGI(TAG, "Restart requested");
+	ota_flash->restart();
+
+	/* restart() should not return */
+	OS_MSLEEP(10000);
+	OS_THREAD_EXIT();
+}
+
 /* --- public API --- */
 
 int ota_upgrade(const char *url, uint32_t len)
@@ -414,6 +437,25 @@ int ota_upgrade(const char *url, uint32_t len)
 	}
 
 	OS_LOGI(TAG, "OTA upgrade started (url: %s)", ota_task_url);
+	return 0;
+}
+
+int ota_restart(void)
+{
+	bool ok;
+
+	if (!ota_flash) {
+		OS_LOGE(TAG, "Restart requested, but OTA is not enabled");
+		return -1;
+	}
+
+	OS_THREAD_CREATE(ok, NULL, ota_restart_task, NULL, "ota_restart", 2048);
+	if (!ok) {
+		OS_LOGE(TAG, "Failed to create the restart task");
+		return -1;
+	}
+
+	OS_LOGI(TAG, "Restart requested");
 	return 0;
 }
 

@@ -69,6 +69,7 @@ static const char *TAG = "SIMPLE-CTRL";
 #define CTRL_INFO_TYPE_FW_VERSION	0x04
 #define CTRL_INFO_TYPE_FW_UPGRADE	0x05
 #define CTRL_INFO_TYPE_FW_PROGRESS	0x06
+#define CTRL_INFO_TYPE_FW_RESTART	0x07
 
 #define CTRL_RETURN_OK			0x00
 #define CTRL_RETURN_FAIL		0x01
@@ -419,6 +420,13 @@ static int simple_ctrl_info(char *buffer, int buf_offs, int vaild_size, int buff
 		}
 		buffer[buf_offs + 1] = CTRL_RETURN_OK;
 		buffer[buf_offs + 2] = ota_get_progress();
+		break;
+	case CTRL_INFO_TYPE_FW_RESTART:
+		/* Response: [cmd, ret]. The actual restart happens shortly after
+		 * in a one-shot task (ota_restart()), so this acknowledgement
+		 * reaches the caller before the chip restarts. */
+		buffer[buf_offs + 1] = ota_restart() == 0 ? CTRL_RETURN_OK : CTRL_RETURN_FAIL;
+		ret = 2;
 		break;
 	default:
 		buffer[buf_offs + 1] = CTRL_RETURN_FAIL;
