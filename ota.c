@@ -263,7 +263,7 @@ void hoozz_ota_close(void)
  * The OTA transfer task: open the transport, stream the firmware into the
  * image backend, let the backend verify and commit it, then restart.
  */
-static void ota_transfer_task(void *arg)
+static OS_THREAD_RET ota_transfer_task(void *arg)
 {
 	const struct ota_flash *f = ota_flash;
 	const struct ota_transport *t = ota_task_transport;
@@ -385,7 +385,7 @@ fail:
  * state a warm restart does not fully reset, an I2C bus for example, in
  * flight when the chip restarts) and restarts via the image backend.
  */
-static void ota_restart_task(void *arg)
+static OS_THREAD_RET ota_restart_task(void *arg)
 {
 	OS_MSLEEP(300);
 
