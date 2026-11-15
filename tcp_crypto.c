@@ -31,26 +31,34 @@
 #include "tcp_crypto.h"
 
 /*
- * AES backend: on the ESP8266 use the SDK's T-table esp_aes driver
- * (components/util) -- the same implementation wpa_supplicant links
- * against, so its tables and code are already in the image.
+ * AES backends:
  *
- * Root cause of the original ~4 KB/s tunnel throughput: tiny-AES-c is
- * byte-oriented and took ~50 ms per 256-byte frame (~3 ms per 16-byte
- * block) on this hardware, i.e. the crypto was the bottleneck. The
- * T-table path encrypts the same frame in ~3 ms (P7 self-test
- * measurement: 3008 us/256B), raising tunnel throughput to ~30 KB/s.
+ *  - ESP8266: the SDK's T-table esp_aes driver (components/util) -- the
+ *    same implementation wpa_supplicant links against, so its tables
+ *    and code are already in the image.
  *
- * Gotcha: esp_aes_{en,de}crypt_cbc() CONSUMES THE IV BUFFER IN PLACE
- * (on return it holds the last ciphertext block, the CBC chain state).
- * The wrappers below run it on a local copy so the frame's IV field
+ *  - ESP32-C3: the on-chip AES accelerator (AES-128/256, CBC, via
+ *    GDMA) through the IDF's hardware AES driver (the mbedtls port,
+ *    mbedtls/port/aes/dma). The whole frame runs as one hardware CBC
+ *    transform; the driver updates the IV buffer in place to the last
+ *    ciphertext block, same as the ESP8266 backend. The C6/H2 carry
+ *    the same engine and driver, but only the C3 is enabled here.
+ *
+ *  - other targets: tiny-AES-c, byte-oriented software. It took ~50 ms
+ *    per 256-byte frame (~3 ms per 16-byte block) on the ESP8266 and
+ *    ~4.5 ms per 1 KiB frame on the C3 -- the crypto was the tunnel
+ *    bottleneck until the hardware backends above.
+ *
+ * Gotcha: both esp_aes backends CONSUME THE IV BUFFER IN PLACE (on
+ * return it holds the last ciphertext block, the CBC chain state).
+ * The wrappers below run them on a local copy so the frame's IV field
  * keeps the original random IV on the wire; tiny-AES-c has the same
  * semantics (AES_ctx_set_iv copies the IV into the context).
- *
- * Other targets keep tiny-AES-c.
  */
 #if defined(CONFIG_IDF_TARGET_ESP8266)
 # include <esp_aes.h>
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+# include "aes/esp_aes.h"
 #endif
 
 static const char *TAG = "TCP-CRYPTO";
@@ -110,6 +118,11 @@ struct tcp_crypto {
 	 * inverse key schedule, the encrypt context the forward one */
 	esp_aes_t enc_ctx;
 	esp_aes_t dec_ctx;
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+	/* One context for both directions: the driver re-writes the key
+	 * (in the requested mode) before every transform, so no inverse
+	 * key schedule is needed */
+	esp_aes_context aes_ctx;
 #else
 	struct AES_ctx aes_ctx;
 #endif
@@ -160,6 +173,10 @@ static void tcp_crypto_aes_set_key(struct tcp_crypto *tc, const uint8_t *key)
 #if defined(CONFIG_IDF_TARGET_ESP8266)
 	esp_aes_set_encrypt_key(&tc->enc_ctx, key, 128);
 	esp_aes_set_decrypt_key(&tc->dec_ctx, key, 128);
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+	esp_aes_init(&tc->aes_ctx);
+	if (esp_aes_setkey(&tc->aes_ctx, key, 128) != 0)
+		OS_LOGE(TAG, "esp_aes_setkey failed");
 #else
 	AES_init_ctx(&tc->aes_ctx, key);
 #endif
@@ -173,6 +190,17 @@ static void tcp_crypto_aes_encrypt(struct tcp_crypto *tc, uint8_t *iv,
 
 	memcpy(iv_copy, iv, sizeof(iv_copy));
 	esp_aes_encrypt_cbc(&tc->enc_ctx, ct, ct_len, ct, ct_len, iv_copy);
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+	uint8_t iv_copy[TCP_CRYPTO_KEY_LENGTH];
+
+	if (ct_len == 0)
+		return;
+	/* The driver consumes the IV buffer in place (see the backend
+	 * docblock); the frame's IV field must keep the original IV */
+	memcpy(iv_copy, iv, sizeof(iv_copy));
+	if (esp_aes_crypt_cbc(&tc->aes_ctx, ESP_AES_ENCRYPT, (size_t)ct_len,
+			       iv_copy, ct, ct) != 0)
+		OS_LOGE(TAG, "Hardware AES encrypt failed");
 #else
 	AES_ctx_set_iv(&tc->aes_ctx, iv);
 	AES_CBC_encrypt_buffer(&tc->aes_ctx, ct, ct_len);
@@ -187,6 +215,15 @@ static void tcp_crypto_aes_decrypt(struct tcp_crypto *tc, uint8_t *iv,
 
 	memcpy(iv_copy, iv, sizeof(iv_copy));
 	esp_aes_decrypt_cbc(&tc->dec_ctx, ct, ct_len, ct, ct_len, iv_copy);
+#elif defined(CONFIG_IDF_TARGET_ESP32C3)
+	uint8_t iv_copy[TCP_CRYPTO_KEY_LENGTH];
+
+	if (ct_len == 0)
+		return;
+	memcpy(iv_copy, iv, sizeof(iv_copy));
+	if (esp_aes_crypt_cbc(&tc->aes_ctx, ESP_AES_DECRYPT, (size_t)ct_len,
+			       iv_copy, ct, ct) != 0)
+		OS_LOGE(TAG, "Hardware AES decrypt failed");
 #else
 	AES_ctx_set_iv(&tc->aes_ctx, iv);
 	AES_CBC_decrypt_buffer(&tc->aes_ctx, ct, ct_len);
