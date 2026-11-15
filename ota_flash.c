@@ -126,7 +126,7 @@ static void ota_validation_task(void *arg)
  * nvs_flash_init(). If the current boot is the first boot of a new image
  * that keeps failing to start, roll back to the previous image and reboot.
  */
-static void ota_first_boot_check(void)
+static void ota_flash_first_boot_check(void)
 {
 	ota_nvs_handle_t h;
 	const esp_partition_t *running, *prev;
@@ -183,7 +183,7 @@ static void ota_first_boot_check(void)
 
 /* --- image write (esp_ota_* into the other OTA partition) --- */
 
-static int ota_image_begin(uint32_t image_size, void **handle)
+static int ota_flash_image_begin(uint32_t image_size, void **handle)
 {
 	const esp_partition_t *next;
 	esp_ota_handle_t h;
@@ -207,7 +207,7 @@ static int ota_image_begin(uint32_t image_size, void **handle)
 	return 0;
 }
 
-static int ota_image_write(void *handle, const uint8_t *data, uint32_t size)
+static int ota_flash_image_write(void *handle, const uint8_t *data, uint32_t size)
 {
 	esp_err_t ret;
 
@@ -221,7 +221,7 @@ static int ota_image_write(void *handle, const uint8_t *data, uint32_t size)
 	return 0;
 }
 
-static int ota_image_end(void *handle)
+static int ota_flash_image_end(void *handle)
 {
 	esp_err_t ret;
 
@@ -239,7 +239,7 @@ static int ota_image_end(void *handle)
  * Switch the next boot to the image we just wrote and arm the first-boot
  * validation for it.
  */
-static int ota_commit(void)
+static int ota_flash_commit(void)
 {
 	const esp_partition_t *next;
 
@@ -256,16 +256,16 @@ static int ota_commit(void)
 }
 
 /* On this platform the restart is a full chip reboot. */
-static void ota_restart(void)
+static void ota_flash_restart(void)
 {
 	esp_restart();
 }
 
 const struct ota_flash esp_idf_ota_flash = {
-	ota_first_boot_check,
-	ota_image_begin,
-	ota_image_write,
-	ota_image_end,
-	ota_commit,
-	ota_restart,
+	ota_flash_first_boot_check,
+	ota_flash_image_begin,
+	ota_flash_image_write,
+	ota_flash_image_end,
+	ota_flash_commit,
+	ota_flash_restart,
 };

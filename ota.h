@@ -159,6 +159,18 @@ const char *ota_get_version(void);
  */
 int ota_upgrade(const char *url, uint32_t len);
 
+/*
+ * Request a device restart (the INFO/FW_RESTART command). Spawns a
+ * short-lived task that - a moment after this returns, so the command's
+ * acknowledgement can be flushed over the control channel - runs the
+ * pre-restart callback (see ota_enable()) and calls the image backend's
+ * restart().
+ *
+ * Returns 0 when the restart has been scheduled, <0 on failure (OTA not
+ * enabled, task creation failed).
+ */
+int ota_restart(void);
+
 /* Current upgrade progress, 0-100 (0 = not started, 100 = done, about to restart). */
 uint8_t ota_get_progress(void);
 
